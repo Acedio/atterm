@@ -50,10 +50,12 @@ void lcd_write(unsigned char address, unsigned char flags) {
 void lcd_init() {
   lcd_wait();
 
-  // 4 bit mode is default, so need to send two bits in most significant nibble.
   // 8 bits, 2 lines, 5x8
-  lcd_write(0x30, 0);
-  lcd_write(0x80, 0);
+  lcd_write(0x38, 0);
+  lcd_wait();
+
+  // Clear the screen.
+  lcd_write(0x01, 0);
   lcd_wait();
 
   // Enable screen, cursor, and blinking

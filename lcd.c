@@ -68,28 +68,103 @@ void lcd_write_char(unsigned char c) {
   lcd_wait();
 }
 
+void lcd_custom_char(int index, unsigned char b[8]) {
+  if (index < 0 || index >= 16) {
+    return;
+  }
+
+  lcd_write(0x40 + (index * 8), 0);
+  lcd_wait();
+
+  int row;
+  for (row = 0; row < 8; ++row) {
+    lcd_write_char(b[row]);
+  }
+}
+
+unsigned char smile[8] = {
+    0b00001110, 0b00011111, 0b00010101, 0b00011111,
+    0b00010001, 0b00010001, 0b00011011, 0b00001110,
+};
+
+void acedio() {
+  unsigned char acedio_chars[4][8] = {
+      {
+          0b00000011,
+          0b00000111,
+          0b00001111,
+          0b00001111,
+          0b00001111,
+          0b00011111,
+          0b00011111,
+          0b00011111,
+      },
+      {
+          0b00011000,
+          0b00011100,
+          0b00011110,
+          0b00011110,
+          0b00011110,
+          0b00011111,
+          0b00011111,
+          0b00011111,
+      },
+      {
+          0b00011111,
+          0b00011111,
+          0b00011111,
+          0b00001111,
+          0b00001111,
+          0b00001111,
+          0b00000111,
+          0b00000011,
+      },
+      {
+          0b00011111,
+          0b00011111,
+          0b00011111,
+          0b00011110,
+          0b00011110,
+          0b00011110,
+          0b00011100,
+          0b00011000,
+      },
+  };
+
+  unsigned char acedio[2][16] = {
+      {0x00, 0x01, 0x20, 0x00, 0x03, 0x20, 0xFF, 0x03, 0x20, 0xFF, 0x01, 0x20,
+       0x01, 0x20, 0x00, 0x01},
+      {0x02, 0xFF, 0x20, 0x02, 0x01, 0x20, 0x02, 0xFF, 0x20, 0xFF, 0x03, 0x20,
+       0x02, 0x20, 0x02, 0x03},
+  };
+
+  lcd_custom_char(0, acedio_chars[0]);
+  lcd_custom_char(1, acedio_chars[1]);
+  lcd_custom_char(2, acedio_chars[2]);
+  lcd_custom_char(3, acedio_chars[3]);
+
+  lcd_write(0x80, 0);
+  lcd_wait();
+  int c;
+  for (c = 0; c < 16; ++c) {
+    lcd_write_char(acedio[0][c]);
+  }
+
+  lcd_write(0xC0, 0);
+  lcd_wait();
+  for (c = 0; c < 16; ++c) {
+    lcd_write_char(acedio[1][c]);
+  }
+}
+
 int main(void) {
   DDRB = _BV(DDB1) | _BV(DDB2) | _BV(DDB3) | ~_BV(DDB4);
 
   lcd_init();
 
-  lcd_write(0x80, 0);
-  lcd_wait();
+  lcd_custom_char(0, smile);
 
-  // a ku se su
-  lcd_write_char(0xB1);
-  lcd_write_char(0xB8);
-  lcd_write_char(0xBE);
-  lcd_write_char(0xBD);
-  lcd_write_char(0xF4);
-
-  lcd_write(0xC0, 0);
-  lcd_wait();
-
-  lcd_write_char(0xB1);
-  lcd_write_char(0xB8);
-  lcd_write_char(0xBE);
-  lcd_write_char(0xBD);
+  acedio();
 
   while (1) {
     lcd_out(0, LCD_LED);

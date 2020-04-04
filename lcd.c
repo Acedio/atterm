@@ -1,3 +1,11 @@
+// Port assignment
+// PB0 - LCD busy pin and the MSB of the LCD bus.
+// PB1 - Serial out to the shift registers.
+// PB2 - Clock for serial input on the shift registers.
+// PB3 - Clock for the outputs on the shift registers.
+// PB4 - Unused, but will used for PS/2 clock.
+// PB5 - Reset pin, left open for programming.
+
 #include <avr/io.h>
 #define F_CPU 8000000UL
 #include <util/delay.h>
@@ -38,7 +46,7 @@ void lcd_wait() {
     // TODO: Can shorten these to 8 bits (no address).
     lcd_out(0, LCD_RW_READ);
     lcd_out(0, LCD_E | LCD_RW_READ);
-  } while (PINB & _BV(PINB4));
+  } while (PINB & _BV(PINB0));
 }
 
 void lcd_write(unsigned char address, unsigned char flags) {
@@ -158,7 +166,9 @@ void acedio() {
 }
 
 int main(void) {
-  DDRB = _BV(DDB1) | _BV(DDB2) | _BV(DDB3) | ~_BV(DDB4);
+  DDRB =  _BV(DDB1) | _BV(DDB2) | _BV(DDB3);
+  // Enable pullups on the input ports.
+  PORTB = _BV(PB0) | _BV(PB4) | _BV(PB5);
 
   lcd_init();
 

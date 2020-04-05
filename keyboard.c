@@ -16,7 +16,7 @@
 // Keyboard must be disabled (keyboard clock held low) during LCD operations.
 void kb_disable() {
   DDRB |= _BV(KB_BUS_DD) | _BV(KB_CLK_DD);
-  // Clock low, data high.
+  // Clock low, data high disables the keyboard.
   PORTB = (PORTB | _BV(KB_BUS_PORT)) & ~_BV(KB_CLK_PORT);
 }
 

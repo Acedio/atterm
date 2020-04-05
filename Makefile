@@ -5,16 +5,16 @@ CC             = avr-gcc
 override CFLAGS        = -g -Wall $(OPTIMIZE) -mmcu=$(MCU_TARGET)
 override LDFLAGS       =
 
-all: lcd.hex 
+all: lcd.hex keyboard.hex
 
-lcd.elf: lcd.c
+%.elf: %.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
-lcd.hex: lcd.elf
+%.hex: %.elf
 	avr-objcopy -j .text -j .data -O ihex $< $@
 
-upload: lcd.hex
-	avrdude -p t85 -c ftdifriend -b 19200 -u -U flash:w:lcd.hex
+upload: keyboard.hex
+	avrdude -p t85 -c ftdifriend -b 19200 -u -U flash:w:$<
 
 clean:
 	rm -rf *.o

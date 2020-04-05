@@ -9,7 +9,9 @@ all: atterm.hex
 
 keyboard.o: keyboard.h
 
-atterm.elf: atterm.o keyboard.o
+lcd.o: lcd.h
+
+atterm.elf: atterm.o keyboard.o lcd.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 %.o: %.c

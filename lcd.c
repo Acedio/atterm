@@ -4,11 +4,11 @@
 
 // Keyboard pins
 // PB0 - LCD busy pin and the MSB of the LCD bus.
-// PB1 - Serial out to the shift registers (USI default).
-// PB2 - Clock for serial input on the shift registers (USI default).
+// PB1 - Serial data out for the shift registers (USI default).
+// PB2 - Serial clock for the shift registers (USI default).
 // PB3 - Clock for the outputs on the shift registers.
 #define SER_BUSY_PIN 0
-#define SER_OUT_PIN 1
+#define SER_DATA_PIN 1
 #define SER_CLK_PIN 2
 #define SER_LATCH_PIN 3
 
@@ -44,6 +44,8 @@ void lcd_wait() {
     lcd_out(0, LCD_RW_READ);
     lcd_out(0, LCD_E | LCD_RW_READ);
   } while (PINB & _BV(SER_BUSY_PIN));
+  // Always bring LCD_E low again so it's in a consistent state.
+  lcd_out(0, LCD_RW_READ);
 }
 
 void lcd_write(unsigned char address, unsigned char flags) {
@@ -147,13 +149,13 @@ void acedio() {
 }
 
 void lcd_enable() {
-  DDRB |= _BV(SER_OUT_PIN);
+  // Nothing actually needed here.
 }
 
 void lcd_disable() {
-  DDRB &= ~_BV(SER_OUT_PIN);
-  // Enable pull-up.
-  PORTB |= _BV(SER_OUT_PIN);
+  // This will hold the MSB/busy flag high without actually writing anything
+  // (LCD_E is low), which will allow the busy input to be used for other reads.
+  lcd_out(0xFF, 0);
 }
 
 void lcd_init() {
@@ -162,10 +164,10 @@ void lcd_init() {
   // Enable pullups on the busy pin.
   PORTB |= _BV(SER_BUSY_PIN);
 
-  // CLK and LATCH are always outputs.
-  DDRB |= _BV(SER_CLK_PIN) | _BV(SER_LATCH_PIN);
-  // Init both to low.
-  PORTB &= ~(_BV(SER_CLK_PIN) | _BV(SER_LATCH_PIN));
+  // CLK, LATCH, and OUT are always outputs.
+  DDRB |= _BV(SER_CLK_PIN) | _BV(SER_LATCH_PIN) | _BV(SER_DATA_PIN);
+  // Init all to low.
+  PORTB &= ~(_BV(SER_CLK_PIN) | _BV(SER_LATCH_PIN) | _BV(SER_DATA_PIN));
 
   lcd_enable();
   lcd_wait();

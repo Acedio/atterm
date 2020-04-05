@@ -4,26 +4,32 @@
 #include <util/delay.h>
 #include <util/parity.h>
 
-#define KB_BUS_DD DDB1
-#define KB_BUS_PORT PB1
-#define KB_BUS_PIN PINB1
-
-#define KB_CLK_DD DDB4
-#define KB_CLK_PORT PB4
-#define KB_CLK_PIN PINB4
+#define KB_BUS_PIN 0
+#define KB_CLK_PIN 4
 #define KB_CLK_PCMSK PCINT4
 
 // Keyboard must be disabled (keyboard clock held low) during LCD operations.
 void kb_disable() {
-  DDRB |= _BV(KB_BUS_DD) | _BV(KB_CLK_DD);
-  // Clock low, data high disables the keyboard.
-  PORTB = (PORTB | _BV(KB_BUS_PORT)) & ~_BV(KB_CLK_PORT);
+  PCMSK = 0;
+  GIMSK = 0;
+  GIFR |= _BV(PCIF);
+
+  DDRB |= _BV(KB_CLK_PIN);
+  // Clock low disables the keyboard.
+  PORTB &= ~_BV(KB_CLK_PIN);
+  // Wait a bit to ensure the keyboard releases the bus pin.
+  _delay_us(100);
 }
 
 void kb_enable() {
-  DDRB &= ~_BV(KB_BUS_DD) & ~_BV(KB_CLK_DD);
+  DDRB &= ~_BV(KB_CLK_PIN);
   // Enable pullups.
-  PORTB |= _BV(KB_BUS_PORT) | _BV(KB_CLK_PORT);
+  PORTB |= _BV(KB_CLK_PIN);
+
+  // Enable pin change interrupts on clock pin only.
+  PCMSK = _BV(KB_CLK_PCMSK);
+  GIMSK = _BV(PCIE);
+  GIFR |= _BV(PCIF);
 }
 
 #define PS2_ERROR 0
@@ -137,6 +143,10 @@ unsigned char kb_read(unsigned char* out) {
 }
 
 void kb_init() {
+  // Bus is always input.
+  DDRB &= ~_BV(KB_BUS_PIN);
+  // Enable pull-up.
+  PORTB |= _BV(KB_BUS_PIN);
   kb_byte = 0;
   kb_state = PS2_START;
   kb_cur = 0;
@@ -145,9 +155,4 @@ void kb_init() {
   kb_disable();
 
   _delay_ms(1000);
-
-  // Enable pin change interrupts on clock pin only.
-  PCMSK = _BV(KB_CLK_PCMSK);
-  GIMSK = _BV(PCIE);
-  GIFR |= _BV(PCIF);
 }

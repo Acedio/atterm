@@ -36,22 +36,27 @@
 // change interrupt on the keyboard clock line and set it as an input.
 
 int main(void) {
-  /*
   cli();
+  // Don't do anything for a little bit to make programming easier :P
+  _delay_ms(100);
+
+  lcd_init();
   kb_init();
 
   kb_enable();
   sei();
 
-  while(1) {
-    unsigned char b;
-    if (kb_read(&b) && b == 0x1C) {
-      PORTB ^= _BV(PB0);
-    }
+  // Wait for 'A' to be hit.
+  unsigned char b;
+  while (!kb_read(&b) || b != 0x1C) {
   }
-  */
-  lcd_init();
+  kb_disable();
+  cli();
+  _delay_ms(100);
+
   lcd_enable();
   acedio();
-  lcd_disable();
+
+  while (1) {
+  }
 }

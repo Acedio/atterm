@@ -4,26 +4,26 @@
 #include <util/delay.h>
 #include <util/parity.h>
 
-#define DD_BUS DDB1
-#define PORT_BUS PB1
-#define PIN_BUS PINB1
+#define KB_BUS_DD DDB1
+#define KB_BUS_PORT PB1
+#define KB_BUS_PIN PINB1
 
-#define DD_CLK DDB4
-#define PORT_CLK PB4
-#define PIN_CLK PINB4
-#define CLK_PCMSK PCINT4
+#define KB_CLK_DD DDB4
+#define KB_CLK_PORT PB4
+#define KB_CLK_PIN PINB4
+#define KB_CLK_PCMSK PCINT4
 
 // Keyboard must be disabled (keyboard clock held low) during LCD operations.
-void disable_keyboard() {
-  DDRB |= _BV(DD_BUS) | _BV(DD_CLK);
+void kb_disable() {
+  DDRB |= _BV(KB_BUS_DD) | _BV(KB_CLK_DD);
   // Clock low, data high.
-  PORTB = (PORTB | _BV(PORT_BUS)) & ~_BV(PORT_CLK);
+  PORTB = (PORTB | _BV(KB_BUS_PORT)) & ~_BV(KB_CLK_PORT);
 }
 
-void enable_keyboard() {
-  DDRB &= ~_BV(DD_BUS) & ~_BV(DD_CLK);
+void kb_enable() {
+  DDRB &= ~_BV(KB_BUS_DD) & ~_BV(KB_CLK_DD);
   // Enable pullups.
-  PORTB |= _BV(PORT_BUS) | _BV(PORT_CLK);
+  PORTB |= _BV(KB_BUS_PORT) | _BV(KB_CLK_PORT);
 }
 
 #define PS2_ERROR 0
@@ -42,13 +42,22 @@ void enable_keyboard() {
 unsigned char kb_state;
 unsigned char kb_byte;
 
+// Circular buffer.
+#define KB_BUF_LEN 8
+#define KB_BUF_LEN_MASK 0x7
+unsigned char kb_buf[KB_BUF_LEN];
+// The last read byte.
+unsigned char kb_cur;
+// The last written byte.
+unsigned char kb_end;
+
 ISR(PCINT0_vect) {
   // Read bus on the falling clock edge.
-  if (!(PINB & _BV(PIN_CLK))) {
+  if (!(PINB & _BV(KB_CLK_PIN))) {
     // TODO: Waiting here is necessary but shouldn't hold up everything else on
     // the MCU.
     _delay_us(25);
-    unsigned char b = PINB & _BV(PIN_BUS);
+    unsigned char b = PINB & _BV(KB_BUS_PIN);
     switch (kb_state) {
       case PS2_START: {
         if (b) {
@@ -75,7 +84,8 @@ ISR(PCINT0_vect) {
         break;
       }
       case PS2_PARITY: {
-        if (parity_even_bit(kb_byte) && b || !parity_even_bit(kb_byte) && !b) {
+        if ((parity_even_bit(kb_byte) && b) ||
+            (!parity_even_bit(kb_byte) && !b)) {
           kb_state = PS2_ERROR;
         } else {
           kb_state = PS2_STOP;
@@ -86,13 +96,9 @@ ISR(PCINT0_vect) {
         if (!b) {
           kb_state = PS2_ERROR;
         } else {
+          kb_buf[kb_end] = kb_byte;
+          kb_end = (kb_end + 1) & KB_BUF_LEN_MASK;
           kb_state = PS2_START;
-          // Blink LED on 'A'.
-          if (kb_byte == 0x1C) {
-            led(1);
-            _delay_ms(100);
-            led(0);
-          }
         }
         break;
       }
@@ -103,40 +109,45 @@ ISR(PCINT0_vect) {
   }
 
   if (kb_state == PS2_ERROR) {
-    led(1);
-    disable_keyboard();
-    // _delay_us(150);
-    _delay_ms(100);
-    enable_keyboard();
+    kb_disable();
+    _delay_us(150);
+    kb_enable();
     kb_state = PS2_START;
   }
 }
 
-int main(void) {
-  cli();
-  // PB3 = PS/2 bus
-  // PB4 = PS/2 clock
-  // PB0 = LED
-  DDRB = _BV(DDB0);
-  // Turn off LED, enable pullups on the input and unused ports.
-  PORTB = ~_BV(PB0);
+unsigned char kb_bytes_ready() {
+  if (kb_cur > kb_end) {
+    return kb_end + 8 - kb_cur;
+  } else {
+    return kb_end - kb_cur;
+  }
+}
 
-  // Turn off error LED.
-  led(0);
+unsigned char kb_read(unsigned char* out) {
+  if (!out) {
+    return 0;
+  } else if (kb_bytes_ready() > 0) {
+    *out = kb_buf[kb_cur];
+    kb_cur = (kb_cur + 1) & KB_BUF_LEN_MASK;
+    return 1;
+  } else {
+    return 0;
+  }
+}
 
+void kb_init() {
   kb_byte = 0;
   kb_state = PS2_START;
+  kb_cur = 0;
+  kb_end = 0;
   
-  disable_keyboard();
+  kb_disable();
 
   _delay_ms(1000);
 
   // Enable pin change interrupts on clock pin only.
-  PCMSK = _BV(CLK_PCMSK);
+  PCMSK = _BV(KB_CLK_PCMSK);
   GIMSK = _BV(PCIE);
   GIFR |= _BV(PCIF);
-  enable_keyboard();
-  sei();
-
-  while (1) {}
 }

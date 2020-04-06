@@ -78,7 +78,7 @@ unsigned char kb_cur;
 unsigned char kb_end;
 
 const unsigned char shift_char_map[] =
-  "\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\0"
+  "\0\0\0\0\0\0\0\0\0\0\0\0\0\0~\0"
   "\0\0\0\0\0Q!\0\0\0ZSAW@\0"
   "\0CXDE$#\0\0 VFTR%\0"
   "\0NBHGY^\0\0\0MJU&*\0"
@@ -127,6 +127,9 @@ void kb_process_byte() {
         case 0x59:
           kb_mods |= KB_RSHIFT;
           break;
+        case 0x76:
+          kb_buf[kb_end] = 0;  // ESC
+          kb_end = (kb_end + 1) & KB_BUF_LEN_MASK;
         default:
           break;
       }

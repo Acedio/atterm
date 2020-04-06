@@ -53,7 +53,12 @@ int main(void) {
       kb_disable();
       lcd_enable();
 
-      lcd_write_char(b);
+      if (b == 0) {
+        // Clear screen on ESC.
+        lcd_write(0x01, 0);
+      } else {
+        lcd_write_char(b);
+      }
 
       lcd_disable();
       kb_enable();

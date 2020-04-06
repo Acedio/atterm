@@ -46,10 +46,21 @@ int main(void) {
   kb_enable();
   sei();
 
-  // Wait for 'A' to be hit.
   unsigned char b;
-  while (!kb_read(&b) || b != 0x1C) {
-  }
+  do {
+    if (kb_read(&b)) {
+      cli();
+      kb_disable();
+      lcd_enable();
+
+      lcd_write_char(b);
+
+      lcd_disable();
+      kb_enable();
+      sei();
+    }
+  } while (b != '0');
+
   kb_disable();
   cli();
   _delay_ms(100);
@@ -58,5 +69,9 @@ int main(void) {
   acedio();
 
   while (1) {
+    _delay_ms(500);
+    lcd_out(0xFF, LCD_LED);
+    _delay_ms(500);
+    lcd_out(0xFF, 0);
   }
 }

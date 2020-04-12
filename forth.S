@@ -45,7 +45,10 @@ LED_PIN = PB0
 .section .text
 DOCOL:
   PUSHRSP IP_LREG
-  adiw IP_LREG, CODEWORD_SIZE ; skip to the first token in the word
+  ; R23:22 contains the codeword's address.
+  movw IP_LREG, R22
+  ; Skip past the codeword to get to the first token.
+  adiw IP_LREG, CODEWORD_SIZE
 ; Execute NEXT immediately.
 NEXT:
   ; Load the next token, which is an offset into the token table.
@@ -55,16 +58,17 @@ NEXT:
   lpm ZL, Z
   ldi ZH, hi8(TOKEN_TABLE)
 
-  ; Load the codeword's address from the token table
+  ; Load the codeword's address from the token table. Keep it in R22 so DOCOL
+  ; can read it later.
   lpm R22, Z+
   lpm R23, Z
   movw ZL, R22
 
   ; The codeword contains the address of the code to run for this word, so we
   ; need to jump to the address stored at the codeword.
-  lpm R22, Z+
-  lpm R23, Z
-  movw ZL, R22
+  lpm R20, Z+
+  lpm R21, Z
+  movw ZL, R20
   ; Execute the codeword.
   ijmp
 
@@ -102,13 +106,10 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
+  lit 0
   lit 1
   lit 2
-  lit 3
-  fw ROT
-  fw ROT
-  fw ADD
-  fw SUB
+  fw TWODROP
   fw TESTLED
 
 .set F_IMMED,0x80

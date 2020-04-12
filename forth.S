@@ -1,9 +1,3 @@
-; X, Y, and Z registers have nice functions for stack manipulation and
-; instruction pointers.
-
-; Z should be used for the instruction pointer since it's used for the LPM (load
-; program memory) instruction.
-
 ; Need some way of having both SRAM words and PROGMEM words.
 ; If this is token-based, maybe signify in the LSB what kind of word the token
 ; is for?
@@ -30,6 +24,16 @@ LED_PIN = PB0
 .macro POPRSP reg
   pop \reg + 1
   pop \reg
+.endm
+
+.macro PUSHDSP reg
+  st -Y, \reg
+  st -Y, \reg + 1
+.endm
+
+.macro POPDSP reg
+  ld \reg + 1, Y+
+  ld \reg, Y+
 .endm
 
 .macro JMP label
@@ -64,6 +68,10 @@ NEXT:
   ; Execute the codeword.
   ijmp
 
+.macro fw name
+  .byte T_\name - TOKEN_TABLE
+.endm
+
 ; TODO: Make sure this is where we wind up on RESET
 .global main
 main:
@@ -80,7 +88,7 @@ main:
   ldi DS_LREG, lo8(DS0)
   ldi DS_LREG+1, hi8(DS0)
   ; TODO sts lo8(var_S0), DS_LREG
-  ; TODO sts hi8(var_S0), DS_LREG+1
+  ; TODO sts hi8(var_S0), DS_LREG
 
   ; Initialize the interpreter pointer
   ldi IP_LREG, lo8(cold_start)
@@ -89,7 +97,25 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
-  .byte T_LED - TOKEN_TABLE
+  fw LED
+
+blink:
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+  ldi r26, 0
+  ldi r27, 0
+  ldi r18, 0
+wait:
+  adiw r26, 1
+  brne wait ; loop if not 0
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  inc r18
+  sbrs r18, 3
+  rjmp off
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
+off:
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
@@ -133,31 +159,64 @@ defcode "LED",3,,LED
   JMP blink
 
 defcode "DROP",4,,DROP
-  adiw DS_LREG, 2
+  adiw Y, 2
   JMP NEXT
 
-blink:
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
-  ldi r26, 0
-  ldi r27, 0
-  ldi r18, 0
-wait:
-  adiw r26, 1
-  brne wait ; loop if not 0
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  inc r18
-  sbrs r18, 3
-  rjmp off
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
-off:
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
+defcode "SWAP",4,,SWAP
+  POPDSP 0
+  POPDSP 2
+  PUSHDSP 0
+  PUSHDSP 2
+  JMP NEXT
 
+defcode "DUP",3,,DUP
+  ; MSB is top of stack, LSB is next
+  ldd r0, Y+1
+  ld r1, Y
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "OVER",4,,OVER
+  ldd r0, Y+3
+  ldd r1, Y+2
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "ROT",3,,ROT
+  ; Bring the third item to the top.
+  POPDSP 0
+  POPDSP 2
+  POPDSP 4
+  PUSHDSP 2
+  PUSHDSP 0
+  PUSHDSP 4
+  JMP NEXT
+
+defcode "EXIT",4,,EXIT
+  POPRSP IP_LREG
+  JMP NEXT
+
+defword "-ROT",4,,NROT
+  fw ROT
+  fw ROT
+  fw EXIT
+
+defword "2DROP",5,,TWODROP
+  fw DROP
+  fw DROP
+  fw EXIT
+
+; Defines a token in the token table.
+.macro token name
+  T_\name: .word \name
+.endm
+  
 .balign 256
 TOKEN_TABLE:
-T_DROP: .word DROP
-T_LED: .word LED
+token DROP
+token LED
+token ROT
+token EXIT
 
 .global __vector_default
 __vector_default:

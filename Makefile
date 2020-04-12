@@ -3,16 +3,22 @@ OPTIMIZE       = -Os
 CC             = avr-gcc
 
 override CFLAGS        = -g -Wall $(OPTIMIZE) -mmcu=$(MCU_TARGET)
+override AFLAGS        = -Wall -mmcu=$(MCU_TARGET)
 override LDFLAGS       =
 
-all: atterm.hex
+all: atterm.hex forth.hex
 
 keyboard.o: keyboard.h
 
 lcd.o: lcd.h
 
-atterm.elf: atterm.o keyboard.o lcd.o
+%.elf: %.o
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
+atterm.elf: keyboard.o lcd.o
+
+%.o: %.S
+	$(CC) -c $(AFLAGS) -o $@ $<
 
 %.o: %.c
 	$(CC) -c $(CFLAGS) $(LDFLAGS) -o $@ $<
@@ -20,7 +26,7 @@ atterm.elf: atterm.o keyboard.o lcd.o
 %.hex: %.elf
 	avr-objcopy -j .text -j .data -O ihex $< $@
 
-upload: atterm.hex
+upload: forth.hex
 	avrdude -p t85 -c ftdifriend -b 19200 -u -U flash:w:$<
 
 clean:

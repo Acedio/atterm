@@ -14,15 +14,12 @@
 .set IP_LREG, 24
 ; The data stack pointer is Y (r28)
 .set DS_LREG, 28
-; The token table occupies the last 256 bytes in our 8k of memory.
 .set CODEWORD_SIZE, 2
-
-; TODO: Why aren't these imported via io.h?
-SPL = 0x3E
-SPH = 0x3D
 
 RS0 = 0x100
 DS0 = 0x200
+
+LED_PIN = PB0
 
 ; Must use the register number (e.g. 24 instead of r24)
 .macro PUSHRSP reg
@@ -35,9 +32,9 @@ DS0 = 0x200
   pop \reg
 .endm
 
-.macro CALL_NEXT
-  ldi ZL, lo8(pm(NEXT))
-  ldi ZH, hi8(pm(NEXT))
+.macro JMP label
+  ldi ZL, lo8(pm(\label))
+  ldi ZH, hi8(pm(\label))
   ijmp
 .endm
 
@@ -50,18 +47,15 @@ NEXT:
   ; Load the next token, which is an offset into the token table.
   movw ZL, IP_LREG ; load the address of the next token
   adiw IP_LREG, 1 ; increment the IP
-  ; Load the next token
-  lpm r16, Z
-  ; Find it in the token table.
-  ldi ZL, lo8(pm(TOKEN_TABLE))
-  ldi ZH, hi8(pm(TOKEN_TABLE))
-  add ZL, r16
-  adc ZH, 0
+  ; Load the token index into ZL. ZH is constant
+  lpm ZL, Z
+  ldi ZH, hi8(TOKEN_TABLE)
 
-  ; Load the address of the next Forth word's codeword
+  ; Load the codeword's address from the token table
   lpm R22, Z+
   lpm R23, Z
   movw ZL, R22
+
   ; The codeword contains the address of the code to run for this word, so we
   ; need to jump to the address stored at the codeword.
   lpm R22, Z+
@@ -74,11 +68,13 @@ NEXT:
 .global main
 main:
   cli
+  sbi _SFR_IO_ADDR(DDRB), LED_PIN
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
   ; Intialize return stack
   ldi r16, lo8(RS0)
-  out SPL, r0
+  out _SFR_IO_ADDR(SPL), r16
   ldi r16, hi8(RS0)
-  out SPH, r0
+  out _SFR_IO_ADDR(SPH), r16
 
   ; Initialize data stack
   ldi DS_LREG, lo8(DS0)
@@ -87,13 +83,13 @@ main:
   ; TODO sts hi8(var_S0), DS_LREG+1
 
   ; Initialize the interpreter pointer
-  ldi IP_LREG, lo8(pm(cold_start))
-  ldi IP_LREG+1, hi8(pm(cold_start))
+  ldi IP_LREG, lo8(cold_start)
+  ldi IP_LREG+1, hi8(cold_start)
   ; Call NEXT to kick things off.
-  CALL_NEXT
+  JMP NEXT
 cold_start:
   ; The default program!
-  .byte T_DROP
+  .byte T_LED - TOKEN_TABLE
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
@@ -101,12 +97,14 @@ cold_start:
 .set link,0
 
 .macro defword name, namelen, flags=0, label
+  .balign 2
   .global name_\label
 name_\label :
-  .word pm(link) ; link to the previously defined word
+  .word link ; link to the previously defined word
   .set link,name_\label
   .byte \flags|\namelen ; flags + length byte
   .ascii "\name" ; the name
+  .balign 2
   .global \label
 \label :
   .word pm(DOCOL) ; Codeword
@@ -114,26 +112,52 @@ name_\label :
 .endm
 
 .macro defcode name, namelen, flags=0, label
+  .balign 2
   .global name_\label
 name_\label :
-  .word pm(link) ; link to the previously defined word
+  .word link ; link to the previously defined word
   .set link,name_\label
   .byte \flags|\namelen ; flags + length byte
   .ascii "\name" ; the name
+  .balign 2
   .global \label
 \label :
   .word pm(code_\label) ; Codeword
+  .balign 2
+  .global code_\label
 code_\label :
   ; list of word tokens follow
 .endm
 
+defcode "LED",3,,LED
+  JMP blink
+
 defcode "DROP",4,,DROP
   adiw DS_LREG, 2
-  CALL_NEXT
+  JMP NEXT
 
-.align 2
+blink:
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+  ldi r26, 0
+  ldi r27, 0
+  ldi r18, 0
+wait:
+  adiw r26, 1
+  brne wait ; loop if not 0
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  inc r18
+  sbrs r18, 3
+  rjmp off
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
+off:
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
+
+.balign 256
 TOKEN_TABLE:
-T_DROP: .word pm(DROP)
+T_DROP: .word DROP
+T_LED: .word LED
 
 .global __vector_default
 __vector_default:

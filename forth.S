@@ -72,6 +72,11 @@ NEXT:
   .byte T_\name - TOKEN_TABLE
 .endm
 
+.macro lit word
+  fw LIT
+  .word \word
+.endm
+
 ; TODO: Make sure this is where we wind up on RESET
 .global main
 main:
@@ -97,39 +102,29 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
-  fw LED
-
-blink:
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
-  ldi r26, 0
-  ldi r27, 0
-  ldi r18, 0
-wait:
-  adiw r26, 1
-  brne wait ; loop if not 0
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  inc r18
-  sbrs r18, 3
-  rjmp off
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
-off:
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
+  lit 1
+  lit 2
+  lit 3
+  fw ROT
+  fw ROT
+  fw ADD
+  fw SUB
+  fw TESTLED
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
 .set F_LENMASK,0x1f
 .set link,0
 
-.macro defword name, namelen, flags=0, label
+.macro defword name, flags=0, label
   .balign 2
   .global name_\label
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
-  .byte \flags|\namelen ; flags + length byte
+  .byte \flags|(nameend_\label - name_\label - 3) ; flags + length byte
   .ascii "\name" ; the name
+nameend_\label :
   .balign 2
   .global \label
 \label :
@@ -137,14 +132,15 @@ name_\label :
   ; list of word tokens follow
 .endm
 
-.macro defcode name, namelen, flags=0, label
+.macro defcode name, flags=0, label
   .balign 2
   .global name_\label
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
-  .byte \flags|\namelen ; flags + length byte
+  .byte \flags|(nameend_\label - name_\label - 3) ; flags + length byte
   .ascii "\name" ; the name
+nameend_\label :
   .balign 2
   .global \label
 \label :
@@ -155,34 +151,59 @@ code_\label :
   ; list of word tokens follow
 .endm
 
-defcode "LED",3,,LED
-  JMP blink
+; Blinks the LED if top of stack = 0, holds steady if != 0.
+defcode "TESTLED",,TESTLED
+  POPDSP 16
+  or r16, r17
+  ser r17
+  tst r16
+  breq blink
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+1:
+  jmp 1b
 
-defcode "DROP",4,,DROP
+defcode "LED",,LED
+blink:
+  ldi r26, 0
+  ldi r27, 0
+  ldi r18, 0
+wait:
+  adiw r26, 1
+  brne wait ; loop if not 0
+  inc r18
+  sbrs r18, 3
+  rjmp off
+  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
+off:
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  rjmp wait
+
+defcode "DROP",,DROP
   adiw Y, 2
   JMP NEXT
 
-defcode "SWAP",4,,SWAP
+defcode "SWAP",,SWAP
   POPDSP 0
   POPDSP 2
   PUSHDSP 0
   PUSHDSP 2
   JMP NEXT
 
-defcode "DUP",3,,DUP
+defcode "DUP",,DUP
   ; MSB is top of stack, LSB is next
   ldd r0, Y+1
   ld r1, Y
   PUSHDSP 0
   JMP NEXT
 
-defcode "OVER",4,,OVER
+defcode "OVER",,OVER
   ldd r0, Y+3
   ldd r1, Y+2
   PUSHDSP 0
   JMP NEXT
 
-defcode "ROT",3,,ROT
+defcode "ROT",,ROT
   ; Bring the third item to the top.
   POPDSP 0
   POPDSP 2
@@ -192,32 +213,98 @@ defcode "ROT",3,,ROT
   PUSHDSP 4
   JMP NEXT
 
-defcode "EXIT",4,,EXIT
+defcode "EXIT",,EXIT
   POPRSP IP_LREG
   JMP NEXT
 
-defword "-ROT",4,,NROT
+defword "-ROT",,NROT
   fw ROT
   fw ROT
   fw EXIT
 
-defword "2DROP",5,,TWODROP
+defword "2DROP",,TWODROP
   fw DROP
   fw DROP
   fw EXIT
+
+defword "2DUP",,TWODUP
+  fw OVER
+  fw OVER
+  fw EXIT
+
+defcode "LIT",,LIT
+  ; Push the next word onto the data stack.
+  movw ZL, IP_LREG
+  adiw IP_LREG, 2
+  lpm r0, Z+
+  lpm r1, Z
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "+",,ADD
+  POPDSP 0
+  POPDSP 2
+  add r0, r2
+  adc r1, r3
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "-",,SUB
+  POPDSP 0
+  POPDSP 2
+  sub r0, r2
+  sbc r1, r3
+  PUSHDSP 0
+  JMP NEXT
+
+defword "1+",,INCR
+  fw LIT
+  .word 1
+  fw ADD
+  fw EXIT
+
+defword "1-",,DECR
+  fw LIT
+  .word -1
+  fw ADD
+  fw EXIT
+
+defcode "=0",,EQU
+  POPDSP 16
+  or r16, r17
+  ser r17
+  tst r16
+  breq 1f 
+  clr r17 ; Clear all bits in r17 if the Z flag is cleared.
+1:
+  mov r16, r17 ; Mirror into r16
+  PUSHDSP 0
 
 ; Defines a token in the token table.
 .macro token name
   T_\name: .word \name
 .endm
-  
+
 .balign 256
-TOKEN_TABLE:
+TOKEN_TABLE: ; :g/^defword\|^defcode/t /^TOKEN_TABLE
+token EQU
+token DECR
+token INCR
+token SUB
+token ADD
+token LIT
+token TWODUP
+token TWODROP
+token NROT
+token EXIT
+token ROT
+token OVER
+token DUP
+token SWAP
 token DROP
 token LED
-token ROT
-token EXIT
-
+token TESTLED
+  
 .global __vector_default
 __vector_default:
   reti

@@ -11,7 +11,7 @@
 .set CODEWORD_SIZE, 2
 
 RS0 = 0x100
-DS0 = 0x200
+DS0 = 0x180
 
 LED_PIN = PB0
 
@@ -106,9 +106,12 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
-  lit 11
-  lit 12
-  fw GT
+  lit 0x1234
+  lit 0x190
+  fw TWODUP
+  fw STORE
+  fw FETCH
+  fw EQU
   fw TESTLED
 
 .set F_IMMED,0x80
@@ -298,6 +301,15 @@ defcode "INVERT",,INVERT
   PUSHDSP 0
   JMP NEXT
 
+; Switch the high and low bytes.
+defcode "SWIZZLE",,SWIZZLE
+  POPDSP 0
+  mov r2, r0
+  mov r0, r1
+  mov r1, r2
+  PUSHDSP 0
+  JMP NEXT
+
 defcode "0=",,ZEQU
   POPDSP 30
   ser r16
@@ -345,6 +357,46 @@ defword "<",,LT
   fw ZGT
   fw EXIT
 
+defcode "C!",,STOREBYTE
+  POPDSP 30 ; address
+  POPDSP 0 ; data
+  st Z, r0
+  JMP NEXT
+
+defcode "C@",,FETCHBYTE
+  POPDSP 30 ; address
+  ld r16, Z
+  ldi r17, 0
+  PUSHDSP 16
+  JMP NEXT
+
+; (addr data -- )
+defword "!",,STORE
+  ; Store high byte first.
+  fw TWODUP
+  fw INCR
+  fw STOREBYTE
+  ; Store low byte.
+  fw SWAP
+  fw SWIZZLE
+  fw SWAP
+  fw STOREBYTE
+  fw EXIT
+
+; (addr -- data)
+defword "@",,FETCH
+  fw DUP
+  ; Low byte
+  fw FETCHBYTE
+  fw SWIZZLE
+  fw SWAP
+  ; High byte
+  fw INCR
+  fw FETCHBYTE
+  ; Combine
+  fw OR
+  fw EXIT
+
 ; Defines a token in the token table.
 .macro token name
   T_\name: .word \name
@@ -352,12 +404,17 @@ defword "<",,LT
 
 .balign 256
 TOKEN_TABLE: ; :g/^defword\|^defcode/t /^TOKEN_TABLE
+token FETCH
+token STORE
+token FETCHBYTE
+token STOREBYTE
 token LT
 token GT
 token EQU
 token ZLT
 token ZGT
 token ZEQU
+token SWIZZLE
 token INVERT
 token XOR
 token OR

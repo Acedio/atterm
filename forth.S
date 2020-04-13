@@ -106,10 +106,9 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
-  lit 0
-  lit 1
-  lit 2
-  fw TWODROP
+  lit 11
+  lit 12
+  fw GT
   fw TESTLED
 
 .set F_IMMED,0x80
@@ -259,27 +258,92 @@ defcode "-",,SUB
   JMP NEXT
 
 defword "1+",,INCR
-  fw LIT
-  .word 1
+  lit 1
   fw ADD
   fw EXIT
 
 defword "1-",,DECR
-  fw LIT
-  .word -1
+  lit -1
   fw ADD
   fw EXIT
 
-defcode "=0",,EQU
-  POPDSP 16
-  or r16, r17
-  ser r17
-  tst r16
-  breq 1f 
-  clr r17 ; Clear all bits in r17 if the Z flag is cleared.
-1:
-  mov r16, r17 ; Mirror into r16
+defcode "AND",,AND
+  POPDSP 0
+  POPDSP 2
+  and r0, r2
+  and r1, r3
   PUSHDSP 0
+  JMP NEXT
+
+defcode "OR",,OR
+  POPDSP 0
+  POPDSP 2
+  or r0, r2
+  or r1, r3
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "XOR",,XOR
+  POPDSP 0
+  POPDSP 2
+  eor r0, r2
+  eor r1, r3
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "INVERT",,INVERT
+  POPDSP 0
+  com r0
+  com r1
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "0=",,ZEQU
+  POPDSP 30
+  ser r16
+  adiw r30, 0
+  breq 1f 
+  clr r16 ; Clear all bits in r16 if the Z flag is cleared.
+1:
+  mov r17, r16 ; Mirror into r16
+  PUSHDSP 16
+  JMP NEXT
+
+defcode "0>",,ZGT
+  POPDSP 30
+  ser r16
+  adiw r30, 0
+  brlt 1f 
+  clr r16 ; Clear all bits in r16 if the Z flag is cleared.
+1:
+  mov r17, r16 ; Mirror into r16
+  PUSHDSP 16
+  JMP NEXT
+
+defword "0<",,ZLT
+  fw DUP
+  fw ZEQU
+  fw INVERT
+  fw SWAP
+  fw ZGT
+  fw INVERT
+  fw AND
+  fw EXIT
+
+defword "=",,EQU
+  fw SUB
+  fw ZEQU
+  fw EXIT
+
+defword ">",,GT
+  fw SUB
+  fw ZLT
+  fw EXIT
+
+defword "<",,LT
+  fw SUB
+  fw ZGT
+  fw EXIT
 
 ; Defines a token in the token table.
 .macro token name
@@ -288,7 +352,16 @@ defcode "=0",,EQU
 
 .balign 256
 TOKEN_TABLE: ; :g/^defword\|^defcode/t /^TOKEN_TABLE
+token LT
+token GT
 token EQU
+token ZLT
+token ZGT
+token ZEQU
+token INVERT
+token XOR
+token OR
+token AND
 token DECR
 token INCR
 token SUB

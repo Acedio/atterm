@@ -4,7 +4,7 @@
 
 #include <avr/io.h>
 
-; The interpreter pointer is R25:R24
+; The interpreter pointer is r25:r24
 .set IP_LREG, 24
 ; The data stack pointer is Y (r28)
 .set DS_LREG, 28
@@ -67,8 +67,8 @@ JMP main
 
 DOCOL:
   PUSHRSP IP_LREG
-  ; R23:22 contains the codeword's address.
-  movw IP_LREG, R22
+  ; r23:22 contains the codeword's address.
+  movw IP_LREG, r22
   ; Skip past the codeword to get to the first token.
   adiw IP_LREG, CODEWORD_SIZE
 ; Execute NEXT immediately.
@@ -80,17 +80,17 @@ NEXT:
   lpm ZL, Z
   ldi ZH, hi8(TOKEN_TABLE)
 
-  ; Load the codeword's address from the token table. Keep it in R22 so DOCOL
+  ; Load the codeword's address from the token table. Keep it in r22 so DOCOL
   ; can read it later.
-  lpm R22, Z+
-  lpm R23, Z
-  movw ZL, R22
+  lpm r22, Z+
+  lpm r23, Z
+  movw ZL, r22
 
   ; The codeword contains the address of the code to run for this word, so we
   ; need to jump to the address stored at the codeword.
-  lpm R20, Z+
-  lpm R21, Z
-  movw ZL, R20
+  lpm r20, Z+
+  lpm r21, Z
+  movw ZL, r20
   ; Execute the codeword.
   ijmp
 
@@ -129,13 +129,9 @@ main:
 cold_start:
   ; The default program!
   fw INITRAM
-  fw BASE
-  fw FETCH
-  fw BASE
-  fw STORE
-  fw BASE
-  fw FETCH
   lit 10
+  fw TRI
+  lit 55
   fw EQU
   fw TESTLED
 
@@ -470,6 +466,99 @@ defconst "DOCOL",,__DOCOL,DOCOL
 defconst "F_IMMED",,F_IMMED,F_IMMED
 defconst "F_HIDDEN",,F_HIDDEN,F_HIDDEN
 defconst "F_LENMASK",,F_LENMASK,F_LENMASK
+
+defcode ">R",,TOR
+  POPDSP 0
+  PUSHRSP 0
+  JMP NEXT
+
+defcode "R>",,FROMR
+  POPRSP 0
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "RSP@",,RSPFETCH
+  in r0, _SFR_IO_ADDR(SPL)
+  in r1, _SFR_IO_ADDR(SPH)
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "RSP!",,RSPSTORE
+  POPDSP 0
+  out _SFR_IO_ADDR(SPL), r0
+  out _SFR_IO_ADDR(SPH), r1
+  JMP NEXT
+
+defcode "RDROP",,RDROP
+  POPRSP 0
+  JMP NEXT
+
+defcode "DSP@",,DSPFETCH
+  ; PUSHDSP isn't atomic, so need to buffer it via a different register.
+  movw r0, DS_LREG
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "DSP!",,DSPSTORE
+  ; POPDSP isn't atomic, so need to buffer it via a different register.
+  POPDSP 0
+  movw DS_LREG, r0
+  JMP NEXT
+
+; Pushes the return address onto the data stack.
+defword "LOOP",,LOOP
+  fw FROMR
+  fw DUP
+  fw TOR
+  fw EXIT
+
+; pred a b -- pred ? a : b
+defword "TERN",,TERN
+  fw DUP
+  fw ROT
+  fw AND
+  fw NROT
+  fw INVERT
+  fw AND
+  fw OR
+  fw EXIT
+
+; Calculate the Nth triangle number with some awful stack manipulation.
+; n -- the nth triangle number
+defword "TRIINT",,TRIINT
+  lit 0 ; running sum
+  fw LOOP ; D: LOOP SUM N -- R: EXIT
+  fw TOR ; D: SUM N -- R: LOOP EXIT
+
+  fw OVER ; N SUM N
+  fw ADD  ; NSUM N
+  fw SWAP ; N NSUM
+  fw DECR ; N-1 NSUM
+  fw SWAP ; NSUM N-1
+  fw OVER ; N-1 NSUM N-1
+  lit 0   ; 0 N-1 NSUM N-1
+  fw EQU  ; ISDONE NSUM N-1
+
+  fw FROMR ; D: LOOP ISDONE args -- R: EXIT
+  fw SWAP  ; D: ISDONE LOOP args -- R: EXIT
+  fw OVER  ; D: LOOP ISDONE LOOP args -- R: EXIT
+  fw FROMR ; D: EXIT LOOP ISDONE LOOP args -- R: empty
+  fw DUP
+  fw TOR   ; R: EXIT
+
+  fw ROT   ; D: ISDONE EXIT LOOP LOOP args
+  fw TERN    ; D: next LOOP args
+  fw TOR   ; D: LOOP NSUM N-1 -- R: next EXIT
+  fw EXIT  ; D: LOOP NSUM N-1 -- R: EXIT
+
+defword "TRI",,TRI
+  fw TRIINT
+  fw DROP
+  fw SWAP
+  fw DROP
+  fw FROMR
+  fw DROP
+  fw EXIT
 
 .text
 .balign 256

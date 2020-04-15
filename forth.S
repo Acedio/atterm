@@ -15,6 +15,35 @@ DS0 = 0x180
 
 LED_PIN = PB0
 
+.text
+; Interrupt vectors.
+rjmp reset
+rjmp reset
+rjmp reset
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+nop
+
+.macro JMP label
+  ldi ZL, lo8(pm(\label))
+  ldi ZH, hi8(pm(\label))
+  ijmp
+.endm
+
+reset:
+cli
+JMP main
+
 ; Must use the register number (e.g. 24 instead of r24)
 .macro PUSHRSP reg
   push \reg
@@ -36,13 +65,6 @@ LED_PIN = PB0
   ld \reg, Y+
 .endm
 
-.macro JMP label
-  ldi ZL, lo8(pm(\label))
-  ldi ZH, hi8(pm(\label))
-  ijmp
-.endm
-
-.section .text
 DOCOL:
   PUSHRSP IP_LREG
   ; R23:22 contains the codeword's address.
@@ -106,11 +128,14 @@ main:
   JMP NEXT
 cold_start:
   ; The default program!
-  lit 0x1234
-  lit 0x190
-  fw TWODUP
-  fw STORE
+  fw INITRAM
+  fw BASE
   fw FETCH
+  fw BASE
+  fw STORE
+  fw BASE
+  fw FETCH
+  lit 10
   fw EQU
   fw TESTLED
 
@@ -120,12 +145,13 @@ cold_start:
 .set link,0
 
 .macro defword name, flags=0, label
+  .text
   .balign 2
   .global name_\label
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
-  .byte \flags|(nameend_\label - name_\label - 3) ; flags + length byte
+  .byte \flags|(nameend_\label - . - 3) ; flags + length of the name
   .ascii "\name" ; the name
 nameend_\label :
   .balign 2
@@ -136,12 +162,13 @@ nameend_\label :
 .endm
 
 .macro defcode name, flags=0, label
+  .text
   .balign 2
   .global name_\label
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
-  .byte \flags|(nameend_\label - name_\label - 3) ; flags + length byte
+  .byte \flags|(nameend_\label - . - 1) ; flags + length of the name
   .ascii "\name" ; the name
 nameend_\label :
   .balign 2
@@ -372,14 +399,13 @@ defcode "C@",,FETCHBYTE
 
 ; (addr data -- )
 defword "!",,STORE
-  ; Store high byte first.
-  fw TWODUP
+  ; Store high byte.
+  fw OVER
+  fw SWIZZLE
+  fw OVER
   fw INCR
   fw STOREBYTE
   ; Store low byte.
-  fw SWAP
-  fw SWIZZLE
-  fw SWAP
   fw STOREBYTE
   fw EXIT
 
@@ -388,54 +414,64 @@ defword "@",,FETCH
   fw DUP
   ; Low byte
   fw FETCHBYTE
-  fw SWIZZLE
   fw SWAP
   ; High byte
   fw INCR
   fw FETCHBYTE
+  fw SWIZZLE
   ; Combine
   fw OR
   fw EXIT
 
-; Defines a token in the token table.
-.macro token name
-  T_\name: .word \name
+.macro defvar name, flags=0, label, initial=0
+  defcode \name,\flags,\label
+  ldi r16, lo8(var_\label)
+  ldi r17, hi8(var_\label)
+  PUSHDSP 16
+  JMP NEXT
+  .data
+var_\label:
+  .word \initial
+  .text
 .endm
 
+defvar "STATE",,STATE
+defvar "HERE",,HERE
+defvar "LATEST",,LATEST,name_F_LENMASK  ; TODO: last word in dictionary
+defvar "S0",,SZ,DS0
+defvar "BASE",,BASE,10
+
+defcode "INITRAM",,INITRAM
+  ldi ZL, lo8(__data_load_start)
+  ldi ZH, hi8(__data_load_start)
+  ldi XL, lo8(__data_start)
+  ldi XH, hi8(__data_start)
+1:
+  lpm r0, Z+
+  st X+, r0
+  ldi r16, lo8(__data_load_end)
+  ldi r17, hi8(__data_load_end)
+  sub r16, ZL
+  sbc r17, ZH
+  or r16, r17
+  brne 1b
+  JMP NEXT
+
+.macro defconst name, flags=0, label, value
+  defcode \name,\flags,\label
+  ldi r16, lo8(\value)
+  ldi r17, hi8(\value)
+  PUSHDSP 16
+  JMP NEXT
+.endm
+
+defconst "R0",,RZ,RS0
+defconst "DOCOL",,__DOCOL,DOCOL
+defconst "F_IMMED",,F_IMMED,F_IMMED
+defconst "F_HIDDEN",,F_HIDDEN,F_HIDDEN
+defconst "F_LENMASK",,F_LENMASK,F_LENMASK
+
+.text
 .balign 256
-TOKEN_TABLE: ; :g/^defword\|^defcode/t /^TOKEN_TABLE
-token FETCH
-token STORE
-token FETCHBYTE
-token STOREBYTE
-token LT
-token GT
-token EQU
-token ZLT
-token ZGT
-token ZEQU
-token SWIZZLE
-token INVERT
-token XOR
-token OR
-token AND
-token DECR
-token INCR
-token SUB
-token ADD
-token LIT
-token TWODUP
-token TWODROP
-token NROT
-token EXIT
-token ROT
-token OVER
-token DUP
-token SWAP
-token DROP
-token LED
-token TESTLED
-  
-.global __vector_default
-__vector_default:
-  reti
+TOKEN_TABLE:
+.include "token_table.i"

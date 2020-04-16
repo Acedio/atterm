@@ -13,7 +13,7 @@
 RS0 = 0x100
 DS0 = 0x180
 
-LED_PIN = PB0
+LED_PIN = PB4
 
 .text
 ; Interrupt vectors.
@@ -103,7 +103,6 @@ NEXT:
   .word \word
 .endm
 
-; TODO: Make sure this is where we wind up on RESET
 .global main
 main:
   cli
@@ -118,22 +117,26 @@ main:
   ; Initialize data stack
   ldi DS_LREG, lo8(DS0)
   ldi DS_LREG+1, hi8(DS0)
-  ; TODO sts lo8(var_S0), DS_LREG
-  ; TODO sts hi8(var_S0), DS_LREG
 
   ; Initialize the interpreter pointer
   ldi IP_LREG, lo8(cold_start)
   ldi IP_LREG+1, hi8(cold_start)
   ; Call NEXT to kick things off.
   JMP NEXT
+
 cold_start:
   ; The default program!
   fw INITRAM
-  lit 10
-  fw TRI
-  lit 55
-  fw EQU
-  fw TESTLED
+  fw SERINIT
+
+  ; fw LCDINIT
+  fw BLINK
+
+  fw LOOP
+  fw LCDBUSY
+  fw LEDSTORE
+  fw TRUE
+  fw WHILE
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
@@ -177,33 +180,70 @@ code_\label :
   ; list of word tokens follow
 .endm
 
-; Blinks the LED if top of stack = 0, holds steady if != 0.
-defcode "TESTLED",,TESTLED
-  POPDSP 16
-  or r16, r17
-  ser r17
-  tst r16
-  breq blink
+defword "WAIT",,WAIT
+  ; D: T R:
+  fw LOOP ; D: T R: LOOP
+  fw DECR ; D: T-1 R: LOOP
+  fw DUP  ; D: T-1 T-1 R: LOOP
+  fw ZEQU ; D: =0 T-1 R: LOOP
+  fw INVERT ; D: !=0 T-1 R: LOOP
+  fw WHILE ; D: T-1 R: LOOP
+  fw RDROP
+  fw DROP ; D: empty R: empty
+  fw EXIT
+
+defcode "LED!",,LEDSTORE
+  POPDSP 0
+  cbi _SFR_IO_ADDR(PORTB), LED_PIN
+  or r0, r1
+  breq 1f
   sbi _SFR_IO_ADDR(PORTB), LED_PIN
 1:
-  jmp 1b
+  JMP NEXT
 
-defcode "LED",,LED
-blink:
-  ldi r26, 0
-  ldi r27, 0
-  ldi r18, 0
-wait:
-  adiw r26, 1
-  brne wait ; loop if not 0
-  inc r18
-  sbrs r18, 3
-  rjmp off
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
-off:
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  rjmp wait
+; Blinks the LED if top of stack = 0, holds steady if != 0.
+defword "TESTLED",,TESTLED
+  fw INVERT ; Blink if false.
+  fw LOOP
+
+  fw FALSE
+  fw LEDSTORE
+
+  lit 0x0FFF
+  fw WAIT
+
+  fw TRUE
+  fw LEDSTORE
+
+  lit 0x0FFF
+  fw WAIT
+
+  fw DUP
+  fw WHILE
+  fw RDROP
+
+  fw LOOP
+  fw TRUE
+  fw WHILE
+
+defword "BLINK",,BLINK
+  fw LOOP
+
+  fw LCD_LED
+  fw LCD_RW_READ
+  fw OR
+  fw TOSER
+  lit 0x0FFF
+  fw WAIT
+
+  fw LCD_RW_READ
+  fw OR
+  fw TOSER
+  lit 0x0FFF
+  fw WAIT
+
+  fw TRUE
+  fw WHILE
 
 defcode "DROP",,DROP
   adiw Y, 2
@@ -466,6 +506,8 @@ defconst "DOCOL",,__DOCOL,DOCOL
 defconst "F_IMMED",,F_IMMED,F_IMMED
 defconst "F_HIDDEN",,F_HIDDEN,F_HIDDEN
 defconst "F_LENMASK",,F_LENMASK,F_LENMASK
+defconst "TRUE",,TRUE,0xFFFF
+defconst "FALSE",,FALSE,0x0
 
 defcode ">R",,TOR
   POPDSP 0
@@ -505,10 +547,12 @@ defcode "DSP!",,DSPSTORE
   movw DS_LREG, r0
   JMP NEXT
 
-; Pushes the return address onto the data stack.
+; DUPs the return address so that a copy of the LOOP point still exists even
+; after EXITing from this word.
 defword "LOOP",,LOOP
   fw FROMR
   fw DUP
+  fw TOR
   fw TOR
   fw EXIT
 
@@ -525,10 +569,9 @@ defword "TERN",,TERN
 
 ; Calculate the Nth triangle number with some awful stack manipulation.
 ; n -- the nth triangle number
-defword "TRIINT",,TRIINT
+defword "TRI",,TRI
   lit 0 ; running sum
-  fw LOOP ; D: LOOP SUM N -- R: EXIT
-  fw TOR ; D: SUM N -- R: LOOP EXIT
+  fw LOOP ; D: SUM N -- R: LOOP
 
   fw OVER ; N SUM N
   fw ADD  ; NSUM N
@@ -536,30 +579,123 @@ defword "TRIINT",,TRIINT
   fw DECR ; N-1 NSUM
   fw SWAP ; NSUM N-1
   fw OVER ; N-1 NSUM N-1
-  lit 0   ; 0 N-1 NSUM N-1
-  fw EQU  ; ISDONE NSUM N-1
+  fw ZEQU  ; ISZERO NSUM N-1
+  fw INVERT ; !ISZERO NSUM N-1
+  fw WHILE
+  fw RDROP
 
-  fw FROMR ; D: LOOP ISDONE args -- R: EXIT
-  fw SWAP  ; D: ISDONE LOOP args -- R: EXIT
-  fw OVER  ; D: LOOP ISDONE LOOP args -- R: EXIT
-  fw FROMR ; D: EXIT LOOP ISDONE LOOP args -- R: empty
-  fw DUP
-  fw TOR   ; R: EXIT
-
-  fw ROT   ; D: ISDONE EXIT LOOP LOOP args
-  fw TERN    ; D: next LOOP args
-  fw TOR   ; D: LOOP NSUM N-1 -- R: next EXIT
-  fw EXIT  ; D: LOOP NSUM N-1 -- R: EXIT
-
-defword "TRI",,TRI
-  fw TRIINT
-  fw DROP
-  fw SWAP
-  fw DROP
-  fw FROMR
-  fw DROP
+  fw ADD ; Drop the arg (which is 0 now)
   fw EXIT
 
+; Branches to the top of RSP if COND, else exits normally. Caller needs to RDROP
+; the loop point after the loop terminates.
+defword "WHILE",,WHILE
+  ; D: COND R: NORMAL IFTRUE
+  fw FROMR ; NORMAL COND
+  fw FROMR ; IFTRUE NORMAL COND
+  fw DUP
+  fw TOR   ; D: IFTRUE NORMAL COND R: IFTRUE
+  fw ROT   ; D: COND IFTRUE NORMAL R: IFTRUE
+  fw TERN  ; D: next R: IFTRUE
+  fw TOR
+  ; Maybe conditionally RDROP so the caller doesn't have to?
+  fw EXIT
+
+defconst "LCD_E",,LCD_E,0x80
+defconst "LCD_RW_READ",,LCD_RW_READ,0x40
+defconst "LCD_RS_DR",,LCD_RS_DR,0x20
+defconst "LCD_LED",,LCD_LED,0x10
+
+#define LCD_BUSY_PIN 0
+#define SER_DATA_PIN 1
+#define SER_CLK_PIN 2
+#define SER_LATCH_PIN 3
+
+defcode "SERINIT",,SERINIT
+  cbi _SFR_IO_ADDR(DDRB), LCD_BUSY_PIN
+  sbi _SFR_IO_ADDR(PORTB), LCD_BUSY_PIN
+
+  ; CLK, LATCH, and OUT are always outputs.
+  sbi _SFR_IO_ADDR(DDRB), SER_CLK_PIN
+  sbi _SFR_IO_ADDR(DDRB), SER_LATCH_PIN
+  sbi _SFR_IO_ADDR(DDRB), SER_DATA_PIN
+  ; Init all to low.
+  cbi _SFR_IO_ADDR(PORTB), SER_CLK_PIN
+  cbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
+  cbi _SFR_IO_ADDR(PORTB), SER_DATA_PIN
+  JMP NEXT
+
+defcode "SERLATCH",,SERLATCH
+  cbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
+  sbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
+  JMP NEXT
+
+; Must set the LCD to LCD_RW_READ first.
+defcode "LCDBUSY",,LCDBUSY
+  ldi r16, 0
+  sbic _SFR_IO_ADDR(PINB), LCD_BUSY_PIN
+  ldi r16, 0xFF ; port is busy
+  mov r17, r16
+  PUSHDSP 16
+  JMP NEXT
+
+defcode "B>SER",,BYTETOSER
+  POPDSP 0
+  out _SFR_IO_ADDR(USIDR), r0
+  ldi r16, 0
+  out _SFR_IO_ADDR(USISR), r16
+
+  ; Pulse clock until sent.
+1:
+  ldi r16, _BV(USIWM0) | _BV(USICS1) | _BV(USICLK) | _BV(USITC)
+  bst _SFR_IO_ADDR(USISR), USIOIF
+  brtc 1b
+
+  ; Turn off USI.
+  ldi r16, 0
+  out _SFR_IO_ADDR(USICR), r16
+  JMP NEXT
+
+defword ">SER",,TOSER
+  ; High byte (address) first.
+  fw DUP
+  fw SWIZZLE
+  fw BYTETOSER
+  fw BYTETOSER
+  fw SERLATCH
+  fw EXIT
+
+defword "LCDWAIT",,LCDWAIT
+  fw LOOP
+  fw LCD_RW_READ
+  fw TOSER
+  fw LCD_RW_READ
+  fw LCD_E
+  fw OR
+  fw TOSER
+  fw LCDBUSY
+  fw WHILE
+  fw RDROP
+
+  ; Bring LCD_E low so it's in a consistent state.
+  fw LCD_RW_READ
+  fw TOSER
+  fw EXIT
+
+defword "LCDINIT",,LCDINIT
+  fw LCDWAIT
+  lit 0x3800
+  fw TOSER
+  fw LCDWAIT
+  lit 0x0100
+  fw TOSER
+  fw LCDWAIT
+  lit 0x0F00
+  fw TOSER
+  fw LCDWAIT
+  fw EXIT
+
+; High byte is address and is sent first.
 .text
 .balign 256
 TOKEN_TABLE:

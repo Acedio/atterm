@@ -129,12 +129,12 @@ cold_start:
   fw INITRAM
   fw SERINIT
 
-  ; fw LCDINIT
-  fw BLINK
+  fw LCDINIT
+
+  fw TRUE
+  fw LEDSTORE
 
   fw LOOP
-  fw LCDBUSY
-  fw LEDSTORE
   fw TRUE
   fw WHILE
 
@@ -641,15 +641,18 @@ defcode "LCDBUSY",,LCDBUSY
 
 defcode "B>SER",,BYTETOSER
   POPDSP 0
+  ; Load the byte into the data register.
   out _SFR_IO_ADDR(USIDR), r0
-  ldi r16, 0
+  ; Reset the clock counter.
+  ldi r16, _BV(USIOIF)
   out _SFR_IO_ADDR(USISR), r16
 
   ; Pulse clock until sent.
-1:
   ldi r16, _BV(USIWM0) | _BV(USICS1) | _BV(USICLK) | _BV(USITC)
-  bst _SFR_IO_ADDR(USISR), USIOIF
-  brtc 1b
+1:
+  out _SFR_IO_ADDR(USICR), r16
+  sbis _SFR_IO_ADDR(USISR), USIOIF
+  rjmp 1b
 
   ; Turn off USI.
   ldi r16, 0
@@ -661,7 +664,10 @@ defword ">SER",,TOSER
   fw DUP
   fw SWIZZLE
   fw BYTETOSER
+
+  ; Then the low byte (flags).
   fw BYTETOSER
+
   fw SERLATCH
   fw EXIT
 
@@ -682,17 +688,28 @@ defword "LCDWAIT",,LCDWAIT
   fw TOSER
   fw EXIT
 
+defword "LCDCMD",,LCDCMD
+  fw LCDWAIT ; Wait for free.
+
+  fw DUP
+  fw LCD_E
+  fw OR
+  fw TOSER ; Clock E high first (should already be low).
+
+  fw LCD_E
+  fw INVERT
+  fw AND
+  fw TOSER ; Then low.
+
+  fw EXIT
+
 defword "LCDINIT",,LCDINIT
-  fw LCDWAIT
   lit 0x3800
-  fw TOSER
-  fw LCDWAIT
+  fw LCDCMD
   lit 0x0100
-  fw TOSER
-  fw LCDWAIT
+  fw LCDCMD
   lit 0x0F00
-  fw TOSER
-  fw LCDWAIT
+  fw LCDCMD
   fw EXIT
 
 ; High byte is address and is sent first.

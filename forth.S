@@ -134,6 +134,9 @@ cold_start:
   fw TRUE
   fw LEDSTORE
 
+  fw GREETING
+  fw LCDSTR
+
   fw LOOP
   fw TRUE
   fw WHILE
@@ -305,6 +308,13 @@ defcode "LIT",,LIT
   lpm r0, Z+
   lpm r1, Z
   PUSHDSP 0
+  JMP NEXT
+
+defcode "ROMC@",,CFROMROM
+  POPDSP 30
+  lpm r16, Z
+  ldi r17, 0
+  PUSHDSP 16
   JMP NEXT
 
 defcode "+",,ADD
@@ -509,6 +519,14 @@ defconst "F_LENMASK",,F_LENMASK,F_LENMASK
 defconst "TRUE",,TRUE,0xFFFF
 defconst "FALSE",,FALSE,0x0
 
+.macro defstring name, flags=0, label, value
+  defconst "\name",\flags,\label,string_\label
+string_\label :
+  .string "\value"
+.endm
+
+defstring "GREETING",,GREETING,"Hello, world!"
+
 defcode ">R",,TOR
   POPDSP 0
   PUSHRSP 0
@@ -659,13 +677,14 @@ defcode "B>SER",,BYTETOSER
   out _SFR_IO_ADDR(USICR), r16
   JMP NEXT
 
+; Writes a word to the shift registers.
 defword ">SER",,TOSER
-  ; High byte (address) first.
+  ; High byte first.
   fw DUP
   fw SWIZZLE
   fw BYTETOSER
 
-  ; Then the low byte (flags).
+  ; Then the low byte.
   fw BYTETOSER
 
   fw SERLATCH
@@ -688,6 +707,7 @@ defword "LCDWAIT",,LCDWAIT
   fw TOSER
   fw EXIT
 
+; Writes an LCD command to the shift register and handles the clocking of E.
 defword "LCDCMD",,LCDCMD
   fw LCDWAIT ; Wait for free.
 
@@ -710,6 +730,47 @@ defword "LCDINIT",,LCDINIT
   fw LCDCMD
   lit 0x0F00
   fw LCDCMD
+  fw EXIT
+
+defword "LCDCHAR",,LCDCHAR
+  fw SWIZZLE   ; Char is in high byte.
+  fw LCD_RS_DR ; Data register.
+  fw OR
+  fw LCDCMD
+  fw EXIT
+
+; This should work in a normal word, but doesn't work with LOOP sadly.
+defword "ZEXIT",,ZEXIT
+  fw FROMR ; D: NORMAL COND R: IFZ
+  fw DUP   ; D: NORMAL NORMAL COND R: IFZ
+  fw TOR
+  fw TOR   ; D: COND R: NORMAL NORMAL IFZ
+  ; Remove one NORMAL the first time through. Then, if COND = 0, loop again to
+  ; remove another.
+  fw LOOP  ; D: COND R: LOOP NORMAL NORMAL IFZ
+  fw FROMR ; D: LOOP COND R: NORMAL NORMAL IFZ
+  fw RDROP ; D: LOOP COND R: NORMAL IFZ
+  fw TOR   ; D: COND R: LOOP NORMAL IFZ
+  fw ZEQU  ; D: ZEQU R: LOOP NORMAL IFZ
+  fw DUP   ; D: ZEQU ZEQU R: LOOP NORMAL IFZ
+  fw WHILE ; D: ZEQU R: LOOP NORMAL IFZ
+  fw DROP  ; Drop ZEQU
+  fw RDROP ; Drop LOOP.
+  fw EXIT
+
+defword "LCDSTR",,LCDSTR
+  fw LOOP ; ADDR
+  fw DUP  ; ADDR ADDR
+  fw CFROMROM ; CHAR ADDR
+  fw DUP      ; CHAR CHAR ADDR
+  fw LCDCHAR  ; CHAR ADDR
+  fw SWAP     ; ADDR CHAR
+  fw INCR     ; ADDR+1 CHAR
+  fw SWAP     ; CHAR ADDR+1
+  fw ZEQU     ; ZERO ADDR+1
+  fw INVERT   ; NZ ADDR+1
+  fw WHILE
+  fw RDROP
   fw EXIT
 
 ; High byte is address and is sent first.

@@ -17,7 +17,7 @@ atterm.elf: keyboard.o lcd.o
 forth.o: forth.S token_table.i
 
 token_table.i: forth.S
-	< forth.S grep -E "^def(code|word|var|const)" \
+	< forth.S grep -E "^def(code|word|var|const|string)" \
 	| sed "s/^[^,]*,[^,]*,// ; s/[^A-Z_].*// ; s/\(.*\)/T_\1: .word \1/" > $@
 
 %.elf: %.o

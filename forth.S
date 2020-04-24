@@ -103,6 +103,11 @@ NEXT:
   .word \word
 .endm
 
+.macro zbranch rel
+  fw ZBRANCH
+  .word \rel - . - 2
+.endm
+
 .global main
 main:
   cli
@@ -137,9 +142,7 @@ cold_start:
   fw GREETING
   fw LCDSTR
 
-  fw LOOP
-  fw TRUE
-  fw WHILE
+  fw BLINK
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
@@ -183,16 +186,14 @@ code_\label :
   ; list of word tokens follow
 .endm
 
+; D: T R:
 defword "WAIT",,WAIT
-  ; D: T R:
-  fw LOOP ; D: T R: LOOP
-  fw DECR ; D: T-1 R: LOOP
-  fw DUP  ; D: T-1 T-1 R: LOOP
-  fw ZEQU ; D: =0 T-1 R: LOOP
-  fw INVERT ; D: !=0 T-1 R: LOOP
-  fw WHILE ; D: T-1 R: LOOP
-  fw RDROP
-  fw DROP ; D: empty R: empty
+1:
+  fw DECR ; D: T-1
+  fw DUP  ; D: T-1 T-1
+  fw ZEQU ; D: =0 T-1
+  zbranch 1b ; D: T-1
+  fw DROP ; D: empty
   fw EXIT
 
 defcode "LED!",,LEDSTORE
@@ -206,9 +207,7 @@ defcode "LED!",,LEDSTORE
 
 ; Blinks the LED if top of stack = 0, holds steady if != 0.
 defword "TESTLED",,TESTLED
-  fw INVERT ; Blink if false.
-  fw LOOP
-
+1:
   fw FALSE
   fw LEDSTORE
 
@@ -222,16 +221,15 @@ defword "TESTLED",,TESTLED
   fw WAIT
 
   fw DUP
-  fw WHILE
-  fw RDROP
+  zbranch 1b
 
-  fw LOOP
-  fw TRUE
-  fw WHILE
+1:
+  fw FALSE
+  zbranch 1b
 
+; Blink indefinitely.
 defword "BLINK",,BLINK
-  fw LOOP
-
+1:
   fw LCD_LED
   fw LCD_RW_READ
   fw OR
@@ -240,13 +238,12 @@ defword "BLINK",,BLINK
   fw WAIT
 
   fw LCD_RW_READ
-  fw OR
   fw TOSER
   lit 0x0FFF
   fw WAIT
 
-  fw TRUE
-  fw WHILE
+  fw FALSE
+  zbranch 1b
 
 defcode "DROP",,DROP
   adiw Y, 2
@@ -408,10 +405,10 @@ defcode "0>",,ZGT
 defword "0<",,ZLT
   fw DUP
   fw ZEQU
-  fw INVERT
+  fw ZEQU
   fw SWAP
   fw ZGT
-  fw INVERT
+  fw ZEQU
   fw AND
   fw EXIT
 
@@ -691,7 +688,7 @@ defword ">SER",,TOSER
   fw EXIT
 
 defword "LCDWAIT",,LCDWAIT
-  fw LOOP
+1:
   fw LCD_RW_READ
   fw TOSER
   fw LCD_RW_READ
@@ -699,8 +696,8 @@ defword "LCDWAIT",,LCDWAIT
   fw OR
   fw TOSER
   fw LCDBUSY
-  fw WHILE
-  fw RDROP
+  fw ZEQU
+  zbranch 1b
 
   ; Bring LCD_E low so it's in a consistent state.
   fw LCD_RW_READ
@@ -739,27 +736,8 @@ defword "LCDCHAR",,LCDCHAR
   fw LCDCMD
   fw EXIT
 
-; This should work in a normal word, but doesn't work with LOOP sadly.
-defword "ZEXIT",,ZEXIT
-  fw FROMR ; D: NORMAL COND R: IFZ
-  fw DUP   ; D: NORMAL NORMAL COND R: IFZ
-  fw TOR
-  fw TOR   ; D: COND R: NORMAL NORMAL IFZ
-  ; Remove one NORMAL the first time through. Then, if COND = 0, loop again to
-  ; remove another.
-  fw LOOP  ; D: COND R: LOOP NORMAL NORMAL IFZ
-  fw FROMR ; D: LOOP COND R: NORMAL NORMAL IFZ
-  fw RDROP ; D: LOOP COND R: NORMAL IFZ
-  fw TOR   ; D: COND R: LOOP NORMAL IFZ
-  fw ZEQU  ; D: ZEQU R: LOOP NORMAL IFZ
-  fw DUP   ; D: ZEQU ZEQU R: LOOP NORMAL IFZ
-  fw WHILE ; D: ZEQU R: LOOP NORMAL IFZ
-  fw DROP  ; Drop ZEQU
-  fw RDROP ; Drop LOOP.
-  fw EXIT
-
 defword "LCDSTR",,LCDSTR
-  fw LOOP ; ADDR
+1:
   fw DUP  ; ADDR ADDR
   fw CFROMROM ; CHAR ADDR
   fw DUP      ; CHAR CHAR ADDR
@@ -768,10 +746,25 @@ defword "LCDSTR",,LCDSTR
   fw INCR     ; ADDR+1 CHAR
   fw SWAP     ; CHAR ADDR+1
   fw ZEQU     ; ZERO ADDR+1
-  fw INVERT   ; NZ ADDR+1
-  fw WHILE
-  fw RDROP
+  zbranch 1b
   fw EXIT
+
+; Relative branch.
+defcode "0BRANCH",,ZBRANCH
+  ; Push the next word onto the data stack.
+  movw ZL, IP_LREG
+  ; TODO: This could just be a byte, but would require extending the byte into a
+  ; word.
+  lpm r0, Z+
+  lpm r1, Z+
+  POPDSP 2
+  or r2, r3
+  brne 1f  ; If top of stack is 0, we'll modify Z to branch.
+  add ZL, r0
+  adc ZH, r1
+1:
+  movw IP_LREG, ZL
+  JMP NEXT
 
 ; High byte is address and is sent first.
 .text

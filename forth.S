@@ -10,10 +10,15 @@
 .set DS_LREG, 28
 .set CODEWORD_SIZE, 2
 
+.set PS2_STATE_REG, 8
+.set PS2_DATA_REG, 9
+.set PS2_SUCCESS_REG, 10
+
 RS0 = 0x100
 DS0 = 0x180
 
-LED_PIN = PB4
+#define KB_BUS_PIN 0
+#define KB_CLK_PIN 4
 
 #define LCD_BUSY_PIN 0
 #define SER_DATA_PIN 1
@@ -22,9 +27,9 @@ LED_PIN = PB4
 
 .text
 ; Interrupt vectors.
-rjmp reset
-rjmp reset
-rjmp reset
+rjmp reset ; RESET
+rjmp reset ; INT0
+rjmp pcint0 ; PCINT0
 nop
 nop
 nop
@@ -46,8 +51,122 @@ nop
 .endm
 
 reset:
-cli
 JMP main
+
+; == KEYBOARD ROUTINES ==
+
+#define PS2_ERROR 0
+#define PS2_START 1
+; 2-9 are data bits
+#define PS2_PARITY 10
+#define PS2_STOP 11
+
+; Interrupt called whenever the PS2 clock pin changes.
+pcint0:
+  ; We read the data pin when the clock falls, so return if it's high.
+  sbic _SFR_IO_ADDR(PINB), KB_CLK_PIN
+  reti
+
+  push r16
+  push r17
+  in r16, _SFR_IO_ADDR(SREG)
+  push r16
+
+  rcall kb_clk_fall
+
+  pop r16
+  out _SFR_IO_ADDR(SREG), r16
+  pop r17
+  pop r16
+  reti
+
+kb_clk_fall:
+  ; Wait ~25us because we should read the data line in between clock pulses.
+  ; TODO: Waiting is necessary but should probably let other processes continue.
+  ldi r16, 67
+1:
+  dec r16  ; 1 clk
+  brne 1b ; 2 clk on loop
+
+  ; Read bus pin
+  in r17, _SFR_IO_ADDR(PINB)
+
+  mov r16, PS2_STATE_REG
+
+  ; <= 0 is Error
+  tst r16
+  brlt ps2_error
+  breq ps2_error
+  cpi r16, PS2_START
+  breq ps2_start
+  cpi r16, PS2_PARITY
+  ; If > START and < PARITY, this is a data bit.
+  brlt ps2_data
+  breq ps2_parity
+  cpi r16, PS2_STOP
+  breq ps2_stop
+  ; Fall through to ps2_error if >PS2_STOP
+  
+ps2_error:
+  ; hold clk low for ~100us
+  sbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
+  cbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
+  clr r16
+1:
+  dec r16  ; 1 clk
+  brne 1b ; 2 clk on loop
+  ; release clk, enable pullup
+  cbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
+  sbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
+
+  ; reset status registers
+  clr PS2_SUCCESS_REG
+  ldi r16, PS2_START
+  mov PS2_STATE_REG, r16
+  ret
+ps2_start:
+  ; Start bit is low.
+  andi r17, _BV(KB_BUS_PIN)
+  brne ps2_error ; nz = error
+  clr PS2_DATA_REG
+  inc PS2_STATE_REG
+  ret
+ps2_data: ; low bit first
+  ; Put bit into carry
+  clc
+  sbrc r17, KB_BUS_PIN
+  sec
+  ror PS2_DATA_REG ; rotate carry into high bit of data register
+  inc PS2_STATE_REG
+  ret
+ps2_parity:
+  andi r17, _BV(KB_BUS_PIN)
+  ; This could probably be more efficient.
+  ; Basically, if we EOR all bits together we should get a 1 (odd parity).
+  eor r17, PS2_DATA_REG ; Combine the parity bit into the data register.
+  mov r16, r17
+  swap r16     ; swap nibbles
+  eor r17, r16 ; eor high nibble into low nibble
+  mov r16, r17
+  lsr r16
+  lsr r16
+  eor r17, r16 ; eor bits 2-3 into bits 0-1
+  mov r16, r17
+  lsr r16
+  eor r17, r16 ; eor bit 1 into bit 0
+  sbrs r17, 0  ; Lowest bit should be 1 now (with the parity bit parity is odd)
+  rjmp ps2_error
+  inc PS2_STATE_REG
+  ret
+ps2_stop:
+  ; Stop bit is high.
+  andi r17, _BV(KB_BUS_PIN)
+  breq ps2_error ; zero = error
+  ; TODO: put byte into buffer
+    mov PS2_SUCCESS_REG, PS2_DATA_REG
+  ldi r16, PS2_START
+  mov PS2_STATE_REG, r16
+  ret
 
 ; Must use the register number (e.g. 24 instead of r24)
 .macro PUSHRSP reg
@@ -68,20 +187,6 @@ JMP main
 .macro POPDSP reg
   ld \reg + 1, Y+
   ld \reg, Y+
-.endm
-
-.macro fw name
-  .byte T_\name - TOKEN_TABLE
-.endm
-
-.macro lit word
-  fw LIT
-  .word \word
-.endm
-
-.macro zbranch rel
-  fw ZBRANCH
-  .word \rel - . - 2
 .endm
 
 DOCOL:
@@ -113,12 +218,9 @@ NEXT:
   ; Execute the codeword.
   ijmp
 
-
 .global main
 main:
   cli
-  sbi _SFR_IO_ADDR(DDRB), LED_PIN
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
   ; Intialize return stack
   ldi r16, lo8(RS0)
   out _SFR_IO_ADDR(SPL), r16
@@ -135,20 +237,49 @@ main:
   ; Call NEXT to kick things off.
   JMP NEXT
 
+.macro fw name
+  .byte T_\name - TOKEN_TABLE
+.endm
+
+.macro lit word
+  fw LIT
+  .word \word
+.endm
+
+.macro zbranch rel
+  fw ZBRANCH
+  .word \rel - . - 2
+.endm
+
+; The default program!
 cold_start:
-  ; The default program!
-  fw INITRAM
+  ; Wait because the keyboard is noisy on the busy line (TODO: I think?)
+  lit 0x3FFF
+  fw WAIT
+  fw RAMINIT
   fw SERINIT
-
   fw LCDINIT
+  fw KBINIT
 
+1:
+  fw LCDDISABLE
+  fw KBENABLE
+  lit 0x0FFF
+  fw WAIT
   fw TRUE
   fw LEDSTORE
+  lit 0x0FFF
+  fw WAIT
+  fw FALSE
+  fw LEDSTORE
+  fw KBDISABLE
 
-  lit 0x1234
+  fw LCDCLEAR
+  fw KBSUCCESS
   fw WRITEWORD
 
-  fw BLINK
+  fw FALSE
+  zbranch 1b
 
 .set F_IMMED,0x80
 .set F_HIDDEN,0x20
@@ -202,13 +333,20 @@ defword "WAIT",,WAIT
   fw DROP ; D: empty
   fw EXIT
 
-defcode "LED!",,LEDSTORE
-  POPDSP 0
-  cbi _SFR_IO_ADDR(PORTB), LED_PIN
-  or r0, r1
-  breq 1f
-  sbi _SFR_IO_ADDR(PORTB), LED_PIN
+defword "LED!",,LEDSTORE
+  fw LCD_RW_READ
+  fw SWAP
+  zbranch 1f
+  fw LCD_LED
+  fw OR
 1:
+  fw TOSER
+  fw EXIT
+
+defcode "KBSUCCESS",,KBSUCCESS
+  mov r0, PS2_SUCCESS_REG
+  clr r1
+  PUSHDSP 0
   JMP NEXT
 
 ; Blinks the LED if top of stack = 0, holds steady if != 0.
@@ -250,6 +388,24 @@ defword "BLINK",,BLINK
 
   fw FALSE
   zbranch 1b
+
+; Blink latch pin indefinitely.
+; Useful to call from ASM when the kernel might be dead.
+defcode "LATCHBLINK",,LATCHBLINK
+  ldi r26, 0
+  ldi r27, 0
+  ldi r18, 0
+1:
+  adiw r26, 1
+  brne 1b ; loop if not 0
+  inc r18
+  sbrs r18, 3
+  rjmp 2f
+  sbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
+  rjmp 1b
+2:
+  cbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
+  rjmp 1b
 
 defcode "DROP",,DROP
   adiw Y, 2
@@ -504,7 +660,7 @@ defvar "LATEST",,LATEST,name_F_LENMASK  ; TODO: last word in dictionary
 defvar "S0",,SZ,DS0
 defvar "BASE",,BASE,10
 
-defcode "INITRAM",,INITRAM
+defcode "RAMINIT",,RAMINIT
   ldi ZL, lo8(__data_load_start)
   ldi ZH, hi8(__data_load_start)
   ldi XL, lo8(__data_start)
@@ -636,6 +792,48 @@ defword "WHILE",,WHILE
   ; Maybe conditionally RDROP so the caller doesn't have to?
   fw EXIT
 
+defcode "KBINIT",,KBINIT
+  ; Set bus pin as input and enable pull-up.
+  cbi _SFR_IO_ADDR(DDRB), KB_BUS_PIN
+  sbi _SFR_IO_ADDR(PORTB), KB_BUS_PIN
+  ; Initialize the state machine.
+  ldi r16, PS2_START
+  mov PS2_STATE_REG, r16
+  JMP KBDISABLE
+
+defcode "KBDISABLE",,KBDISABLE
+  cli
+  clr r16
+  out _SFR_IO_ADDR(GIMSK), r16
+  out _SFR_IO_ADDR(PCMSK), r16
+  ; Clear the interrupt flag by writing one to it.
+  ldi r16, _BV(PCIF)
+  out _SFR_IO_ADDR(GIFR), r16
+  ; Holding the clock low disables the keyboard.
+  sbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
+  cbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
+  ; Wait ~100us to ensure the keyboard isn't sending other commands
+  ; (1/8000000 seconds * 256 loops * 3 clocks per loop = 96us)
+  ldi r16, 0
+1:
+  dec r16 ; 1 clk
+  brne 1b ; 2 clk on loop
+  JMP NEXT
+
+defcode "KBENABLE",,KBENABLE
+  ; Set CLK as input and enable pullups.
+  cbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
+  sbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
+  ; Clear any pending interrupts.
+  ldi r16, _BV(PCIF)
+  out _SFR_IO_ADDR(GIFR), r16
+  ; Enable pin change interrupts on CLK pin.
+  sbi _SFR_IO_ADDR(PCMSK), KB_CLK_PIN
+  ldi r16, _BV(PCIE)
+  out _SFR_IO_ADDR(GIMSK), r16
+  sei
+  JMP NEXT
+
 defconst "LCD_E",,LCD_E,0x80
 defconst "LCD_RW_READ",,LCD_RW_READ,0x40
 defconst "LCD_RS_DR",,LCD_RS_DR,0x20
@@ -745,6 +943,7 @@ defword "LCDINIT",,LCDINIT
   ; Enable screen, cursor, and blinking
   lit 0x0F00
   fw LCDCMD
+  fw LCDDISABLE
   fw EXIT
 
 defword "LCDCHAR",,LCDCHAR

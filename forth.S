@@ -15,6 +15,11 @@ DS0 = 0x180
 
 LED_PIN = PB4
 
+#define LCD_BUSY_PIN 0
+#define SER_DATA_PIN 1
+#define SER_CLK_PIN 2
+#define SER_LATCH_PIN 3
+
 .text
 ; Interrupt vectors.
 rjmp reset
@@ -65,6 +70,20 @@ JMP main
   ld \reg, Y+
 .endm
 
+.macro fw name
+  .byte T_\name - TOKEN_TABLE
+.endm
+
+.macro lit word
+  fw LIT
+  .word \word
+.endm
+
+.macro zbranch rel
+  fw ZBRANCH
+  .word \rel - . - 2
+.endm
+
 DOCOL:
   PUSHRSP IP_LREG
   ; r23:22 contains the codeword's address.
@@ -94,19 +113,6 @@ NEXT:
   ; Execute the codeword.
   ijmp
 
-.macro fw name
-  .byte T_\name - TOKEN_TABLE
-.endm
-
-.macro lit word
-  fw LIT
-  .word \word
-.endm
-
-.macro zbranch rel
-  fw ZBRANCH
-  .word \rel - . - 2
-.endm
 
 .global main
 main:
@@ -139,8 +145,8 @@ cold_start:
   fw TRUE
   fw LEDSTORE
 
-  fw GREETING
-  fw LCDSTR
+  lit 0x1234
+  fw WRITEWORD
 
   fw BLINK
 
@@ -339,6 +345,20 @@ defword "1-",,DECR
   lit -1
   fw ADD
   fw EXIT
+
+defcode "2*",,ASL
+  POPDSP 0
+  lsl r0 ; shift into carry
+  rol r1 ; shifts carry into low bit
+  PUSHDSP 0
+  JMP NEXT
+
+defcode "2/",,ASR
+  POPDSP 0
+  asr r1 ; leave high bit, shift rest, shift into carry
+  ror r0 ; shifts carry into high bit
+  PUSHDSP 0
+  JMP NEXT
 
 defcode "AND",,AND
   POPDSP 0
@@ -621,11 +641,6 @@ defconst "LCD_RW_READ",,LCD_RW_READ,0x40
 defconst "LCD_RS_DR",,LCD_RS_DR,0x20
 defconst "LCD_LED",,LCD_LED,0x10
 
-#define LCD_BUSY_PIN 0
-#define SER_DATA_PIN 1
-#define SER_CLK_PIN 2
-#define SER_LATCH_PIN 3
-
 defcode "SERINIT",,SERINIT
   cbi _SFR_IO_ADDR(DDRB), LCD_BUSY_PIN
   sbi _SFR_IO_ADDR(PORTB), LCD_BUSY_PIN
@@ -721,19 +736,80 @@ defword "LCDCMD",,LCDCMD
   fw EXIT
 
 defword "LCDINIT",,LCDINIT
+  ; 8 bits, 2 lines, 5x8
   lit 0x3800
   fw LCDCMD
+  ; clear the screen
   lit 0x0100
   fw LCDCMD
+  ; Enable screen, cursor, and blinking
   lit 0x0F00
   fw LCDCMD
   fw EXIT
 
 defword "LCDCHAR",,LCDCHAR
-  fw SWIZZLE   ; Char is in high byte.
+  fw SWIZZLE   ; Put char in high byte.
   fw LCD_RS_DR ; Data register.
   fw OR
   fw LCDCMD
+  fw EXIT
+
+; Hold the address lines high so the busy pin can be used by other devices.
+defword "LCDDISABLE",,LCDDISABLE
+  lit 0xFF00
+  fw TOSER
+  fw EXIT
+
+defword "LCDCLEAR",,LCDCLEAR
+  lit 0x0100
+  fw LCDCMD
+  fw EXIT
+
+; Lowest 4 bits to hex digit
+defword "TOHEX",,TOHEX
+  lit 0x000F
+  fw AND
+  fw DUP
+  lit 10
+  fw GT
+  zbranch 1f
+  lit '0'
+  fw ADD
+  fw EXIT
+1:
+  lit 'A' - 10
+  fw ADD
+  fw EXIT
+
+defword "WRITEWORD",,WRITEWORD
+  lit '0'
+  fw LCDCHAR
+  lit 'x'
+  fw LCDCHAR
+  lit 4
+1:
+  fw SWAP
+  fw DUP
+  ; Move to bottom nibble
+  fw SWIZZLE
+  fw ASR
+  fw ASR
+  fw ASR
+  fw ASR
+  fw TOHEX
+  fw LCDCHAR
+  ; Shift left 4 bits to move to the next digit.
+  fw ASL
+  fw ASL
+  fw ASL
+  fw ASL
+  fw SWAP
+  fw DECR
+  fw DUP
+  fw ZEQU
+  zbranch 1b
+  fw DROP
+  fw DROP
   fw EXIT
 
 defword "LCDSTR",,LCDSTR

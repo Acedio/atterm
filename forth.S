@@ -12,7 +12,6 @@
 
 .set PS2_STATE_REG, 8
 .set PS2_DATA_REG, 9
-.set PS2_SUCCESS_REG, 10
 
 RS0 = 0x100
 DS0 = 0x180
@@ -61,49 +60,52 @@ JMP main
 #define PS2_PARITY 10
 #define PS2_STOP 11
 
+#define KBUF_SIZE 0x08
+#define KBUF_MASK 0x07
+
 ; Interrupt called whenever the PS2 clock pin changes.
 pcint0:
   ; We read the data pin when the clock falls, so return if it's high.
   sbic _SFR_IO_ADDR(PINB), KB_CLK_PIN
   reti
 
-  push r16
-  push r17
-  in r16, _SFR_IO_ADDR(SREG)
-  push r16
+  push r30
+  push r31
+  in r30, _SFR_IO_ADDR(SREG)
+  push r30
 
   rcall kb_clk_fall
 
-  pop r16
-  out _SFR_IO_ADDR(SREG), r16
-  pop r17
-  pop r16
+  pop r30
+  out _SFR_IO_ADDR(SREG), r30
+  pop r31
+  pop r30
   reti
 
 kb_clk_fall:
   ; Wait ~25us because we should read the data line in between clock pulses.
   ; TODO: Waiting is necessary but should probably let other processes continue.
-  ldi r16, 67
+  ldi r30, 67
 1:
-  dec r16  ; 1 clk
+  dec r30  ; 1 clk
   brne 1b ; 2 clk on loop
 
   ; Read bus pin
-  in r17, _SFR_IO_ADDR(PINB)
+  in r31, _SFR_IO_ADDR(PINB)
 
-  mov r16, PS2_STATE_REG
+  mov r30, PS2_STATE_REG
 
   ; <= 0 is Error
-  tst r16
+  tst r30
   brlt ps2_error
   breq ps2_error
-  cpi r16, PS2_START
+  cpi r30, PS2_START
   breq ps2_start
-  cpi r16, PS2_PARITY
+  cpi r30, PS2_PARITY
   ; If > START and < PARITY, this is a data bit.
   brlt ps2_data
   breq ps2_parity
-  cpi r16, PS2_STOP
+  cpi r30, PS2_STOP
   breq ps2_stop
   ; Fall through to ps2_error if >PS2_STOP
   
@@ -111,22 +113,21 @@ ps2_error:
   ; hold clk low for ~100us
   sbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
   cbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
-  clr r16
+  clr r30
 1:
-  dec r16  ; 1 clk
+  dec r30  ; 1 clk
   brne 1b ; 2 clk on loop
   ; release clk, enable pullup
   cbi _SFR_IO_ADDR(DDRB), KB_CLK_PIN
   sbi _SFR_IO_ADDR(PORTB), KB_CLK_PIN
 
-  ; reset status registers
-  clr PS2_SUCCESS_REG
-  ldi r16, PS2_START
-  mov PS2_STATE_REG, r16
+  ; reset status register
+  ldi r30, PS2_START
+  mov PS2_STATE_REG, r30
   ret
 ps2_start:
   ; Start bit is low.
-  andi r17, _BV(KB_BUS_PIN)
+  andi r31, _BV(KB_BUS_PIN)
   brne ps2_error ; nz = error
   clr PS2_DATA_REG
   inc PS2_STATE_REG
@@ -134,38 +135,54 @@ ps2_start:
 ps2_data: ; low bit first
   ; Put bit into carry
   clc
-  sbrc r17, KB_BUS_PIN
+  sbrc r31, KB_BUS_PIN
   sec
   ror PS2_DATA_REG ; rotate carry into high bit of data register
   inc PS2_STATE_REG
   ret
 ps2_parity:
-  andi r17, _BV(KB_BUS_PIN)
+  andi r31, _BV(KB_BUS_PIN)
   ; This could probably be more efficient.
   ; Basically, if we EOR all bits together we should get a 1 (odd parity).
-  eor r17, PS2_DATA_REG ; Combine the parity bit into the data register.
-  mov r16, r17
-  swap r16     ; swap nibbles
-  eor r17, r16 ; eor high nibble into low nibble
-  mov r16, r17
-  lsr r16
-  lsr r16
-  eor r17, r16 ; eor bits 2-3 into bits 0-1
-  mov r16, r17
-  lsr r16
-  eor r17, r16 ; eor bit 1 into bit 0
-  sbrs r17, 0  ; Lowest bit should be 1 now (with the parity bit parity is odd)
+  eor r31, PS2_DATA_REG ; Combine the parity bit into the data register.
+  mov r30, r31
+  swap r30     ; swap nibbles
+  eor r31, r30 ; eor high nibble into low nibble
+  mov r30, r31
+  lsr r30
+  lsr r30
+  eor r31, r30 ; eor bits 2-3 into bits 0-1
+  mov r30, r31
+  lsr r30
+  eor r31, r30 ; eor bit 1 into bit 0
+  sbrs r31, 0  ; Lowest bit should be 1 now (with the parity bit parity is odd)
   rjmp ps2_error
   inc PS2_STATE_REG
   ret
 ps2_stop:
   ; Stop bit is high.
-  andi r17, _BV(KB_BUS_PIN)
+  andi r31, _BV(KB_BUS_PIN)
   breq ps2_error ; zero = error
-  ; TODO: put byte into buffer
-    mov PS2_SUCCESS_REG, PS2_DATA_REG
-  ldi r16, PS2_START
-  mov PS2_STATE_REG, r16
+
+  ; KBIN is an index and only uses the lo8.
+  ldi r30, lo8(var_KBIN)
+  ldi r31, hi8(var_KBIN)
+  ; Using PS2_STATE_REG as temporary storage here since it will be reset later.
+  ld PS2_STATE_REG, Z+
+  ldi r30, lo8(var_KBUF)
+  ldi r31, hi8(var_KBUF)
+  add r30, PS2_STATE_REG
+  st Z+, PS2_DATA_REG ; KBUF[KBIN] = PS2_DATA_REG
+
+  ; Now determine the new KBIN. It's .balign 8'd, so just mask the bottom 3 bits
+  andi r30, KBUF_MASK
+  mov PS2_STATE_REG, r30
+  ldi r30, lo8(var_KBIN)
+  ldi r31, hi8(var_KBIN)
+  st Z, PS2_STATE_REG
+  
+  ldi r30, PS2_START
+  mov PS2_STATE_REG, r30
   ret
 
 ; Must use the register number (e.g. 24 instead of r24)
@@ -262,21 +279,17 @@ cold_start:
   fw KBINIT
 
 1:
-  fw LCDDISABLE
-  fw KBENABLE
-  lit 0x0FFF
-  fw WAIT
   fw TRUE
   fw LEDSTORE
-  lit 0x0FFF
-  fw WAIT
+
+  fw LCDDISABLE
+  fw KBENABLE
+  fw KEY
+  fw KBDISABLE
+  fw LCDCHAR
+
   fw FALSE
   fw LEDSTORE
-  fw KBDISABLE
-
-  fw LCDCLEAR
-  fw KBSUCCESS
-  fw WRITEWORD
 
   fw FALSE
   zbranch 1b
@@ -342,12 +355,6 @@ defword "LED!",,LEDSTORE
 1:
   fw TOSER
   fw EXIT
-
-defcode "KBSUCCESS",,KBSUCCESS
-  mov r0, PS2_SUCCESS_REG
-  clr r1
-  PUSHDSP 0
-  JMP NEXT
 
 ; Blinks the LED if top of stack = 0, holds steady if != 0.
 defword "TESTLED",,TESTLED
@@ -660,6 +667,24 @@ defvar "LATEST",,LATEST,name_F_LENMASK  ; TODO: last word in dictionary
 defvar "S0",,SZ,DS0
 defvar "BASE",,BASE,10
 
+; KBUF is a ring buffer that stores keyboard input. KBIN and KBOUT are indices
+; into the buffer. KBIN is where the next byte will be written, KBOUT is where
+; the next byte should be read. The buffer is empty when KBIN = KBOUT.
+; TODO: Could store these together in the same word.
+defvar "KBIN",,KBIN,0
+defvar "KBOUT",,KBOUT,0
+
+defcode "KBUF",,KBUF
+  ldi r16, lo8(var_KBUF)
+  ldi r17, hi8(var_KBUF)
+  PUSHDSP 16
+  JMP NEXT
+.data
+.balign KBUF_SIZE
+var_KBUF:
+.fill KBUF_SIZE, 1, 0
+.text
+
 defcode "RAMINIT",,RAMINIT
   ldi ZL, lo8(__data_load_start)
   ldi ZH, hi8(__data_load_start)
@@ -833,6 +858,61 @@ defcode "KBENABLE",,KBENABLE
   out _SFR_IO_ADDR(GIMSK), r16
   sei
   JMP NEXT
+
+defword "KB@",,KBFETCH
+  fw KBOUT
+  fw FETCH
+1:
+  fw DUP
+  fw KBIN
+  fw FETCH
+  fw SUB
+  zbranch 1b
+
+  ; Increment KBOUT
+  fw DUP
+  fw INCR
+  lit KBUF_MASK
+  fw AND
+  fw KBOUT
+  fw STORE
+
+  ; Read the input
+  fw KBUF
+  fw ADD
+  fw FETCHBYTE
+
+  fw EXIT
+
+KB_MAP_SHIFT:
+.ascii \
+  "\0\0\0\0\0\0\0\0\0\0\0\0\0\0~\0",\
+  "\0\0\0\0\0Q!\0\0\0ZSAW@\0",\
+  "\0CXDE$#\0\0 VFTR%\0",\
+  "\0NBHGY^\0\0\0MJU&*\0",\
+  "\0<KIO)(\0\0>?L:P_\0",\
+  "\0\0\"\0{+\0\0\0\0\0}\0|\0\0"
+.set KB_MAP_LEN, . - KB_MAP_SHIFT
+
+defword "KEY",,KEY
+1:
+  fw KBFETCH
+  lit 0xF0
+  fw EQU
+  zbranch 1b
+
+  fw KBFETCH
+
+  ; Verify it's within the map size.
+  fw DUP
+  lit KB_MAP_LEN
+  fw GT
+  zbranch 1b
+
+  lit KB_MAP_SHIFT
+  fw ADD
+  fw CFROMROM
+  fw EXIT
 
 defconst "LCD_E",,LCD_E,0x80
 defconst "LCD_RW_READ",,LCD_RW_READ,0x40

@@ -44,9 +44,7 @@ nop
 nop
 
 .macro JMP label
-  ldi ZL, lo8(pm(\label))
-  ldi ZH, hi8(pm(\label))
-  ijmp
+  rjmp \label
 .endm
 
 reset:
@@ -574,7 +572,7 @@ defcode "0=",,ZEQU
   PUSHDSP 16
   JMP NEXT
 
-defcode "0>",,ZGT
+defcode "0<",,ZLT
   POPDSP 30
   ser r16
   adiw r30, 0
@@ -585,12 +583,12 @@ defcode "0>",,ZGT
   PUSHDSP 16
   JMP NEXT
 
-defword "0<",,ZLT
+defword "0>",,ZGT
   fw DUP
   fw ZEQU
   fw ZEQU
   fw SWAP
-  fw ZGT
+  fw ZLT
   fw ZEQU
   fw AND
   fw EXIT
@@ -600,14 +598,19 @@ defword "=",,EQU
   fw ZEQU
   fw EXIT
 
+defword "<>",,NEQU
+  fw EQU
+  fw ZEQU
+  fw EXIT
+
 defword ">",,GT
   fw SUB
-  fw ZLT
+  fw ZGT
   fw EXIT
 
 defword "<",,LT
   fw SUB
-  fw ZGT
+  fw ZLT
   fw EXIT
 
 defcode "C!",,STOREBYTE
@@ -884,6 +887,16 @@ defword "KB@",,KBFETCH
 
   fw EXIT
 
+KB_MAP:
+.ascii \
+  "\0\0\0\0\0\0\0\0\0\0\0\0\0\0`\0",\
+  "\0\0\0\0\0q1\0\0\0zsaw2\0",\
+  "\0cxde43\0\0 vftr5\0",\
+  "\0nbhgy6\0\0\0mju78\0",\
+  "\0,kio09\0\0./l;p-\0",\
+  "\0\0'\0[=\0\0\0\0\0]\0\\\0\0"
+.set KB_MAP_LEN, . - KB_MAP
+
 KB_MAP_SHIFT:
 .ascii \
   "\0\0\0\0\0\0\0\0\0\0\0\0\0\0~\0",\
@@ -892,26 +905,134 @@ KB_MAP_SHIFT:
   "\0NBHGY^\0\0\0MJU&*\0",\
   "\0<KIO)(\0\0>?L:P_\0",\
   "\0\0\"\0{+\0\0\0\0\0}\0|\0\0"
-.set KB_MAP_LEN, . - KB_MAP_SHIFT
+
+defvar "KBSTATUS",,KBSTATUS,0
+defconst "KBS_BREAK",,KBS_BREAK,0x0001
+defconst "KBS_EXTENDED",,KBS_EXTENDED,0x0002
+defconst "KBS_LSHIFT",,KBS_LSHIFT,0x0004
+
+; FLAGVAR FLAG --
+defword "SETFLAG",,SETFLAG
+  fw SWAP
+  fw OVER
+  fw FETCH
+  fw OR
+  fw SWAP
+  fw STORE
+  fw EXIT
+
+; FLAGVAR FLAG
+defword "CHECKFLAG",,CHECKFLAG
+  fw FETCH
+  fw AND
+  fw ZEQU
+  fw ZEQU
+  fw EXIT
 
 defword "KEY",,KEY
-1:
+key_top:
   fw KBFETCH
-  lit 0xF0
-  fw EQU
-  zbranch 1b
 
-  fw KBFETCH
+  fw DUP
+  lit 0xF0 ; break codes
+  fw EQU
+  zbranch 1f
+  fw DROP
+  fw KBS_BREAK
+  fw KBSTATUS
+  fw SETFLAG
+  fw FALSE
+  zbranch key_top
+1:
+
+  fw DUP
+  lit 0xE0 ; extended keys
+  fw EQU
+  zbranch 1f
+  fw DROP
+  fw KBS_EXTENDED
+  fw KBSTATUS
+  fw SETFLAG
+  fw FALSE
+  zbranch key_top
+1:
+
+  fw DUP
+  lit 0x12 ; left shift
+  fw EQU
+  zbranch 1f
+  fw DROP
+
+  fw KBS_LSHIFT ; The eventual status register value.
+
+  fw KBS_BREAK
+  fw KBSTATUS
+  fw CHECKFLAG
+  zbranch 2f
+  ; break shift and clear other flags
+  ; NOTE: This assumes there are only three status flags.
+  fw DROP
+  fw FALSE
+2:
+
+  fw KBSTATUS
+  fw STORE
+  fw FALSE
+  zbranch key_top
+1:
+
+  ; Past this point, we're always matching a real key (even though we might not
+  ; handle it).
+  fw KBS_BREAK
+  fw KBSTATUS
+  fw CHECKFLAG
+  fw KBS_EXTENDED
+  fw KBSTATUS
+  fw CHECKFLAG
+  fw OR ; Store for below, but clear the status flags first.
+
+  fw KBSTATUS
+  fw FETCH
+  fw KBS_LSHIFT
+  fw AND
+  fw KBSTATUS
+  fw STORE
+
+  zbranch 1f
+  fw DROP ; Throw out the break codes.
+  fw FALSE
+  zbranch key_top
+1:
 
   ; Verify it's within the map size.
   fw DUP
   lit KB_MAP_LEN
   fw GT
-  zbranch 1b
+  fw ZEQU
+  zbranch 1f ; if KB_MAP_LEN <= keycode
+  fw DROP
+  fw FALSE
+  zbranch key_top
+1:
 
+  ; Determine which map to use.
+  lit KB_MAP
+  fw KBS_LSHIFT
+  fw KBSTATUS
+  fw CHECKFLAG
+  zbranch 1f
+  fw DROP
   lit KB_MAP_SHIFT
+1:
+
   fw ADD
-  fw CFROMROM
+  fw CFROMROM ; KB_MAP[keycode]
+  fw DUP
+  fw ZEQU
+  zbranch 1f
+  ; Char is zero in the map and isn't handled.
+  zbranch key_top
+1:
   fw EXIT
 
 defconst "LCD_E",,LCD_E,0x80

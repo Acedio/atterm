@@ -910,8 +910,9 @@ defvar "KBSTATUS",,KBSTATUS,0
 defconst "KBS_BREAK",,KBS_BREAK,0x0001
 defconst "KBS_EXTENDED",,KBS_EXTENDED,0x0002
 defconst "KBS_LSHIFT",,KBS_LSHIFT,0x0004
+defconst "KBS_RSHIFT",,KBS_RSHIFT,0x0008
 
-; FLAGVAR FLAG --
+; FLAGSVAR FLAG --
 defword "SETFLAG",,SETFLAG
   fw SWAP
   fw OVER
@@ -921,12 +922,52 @@ defword "SETFLAG",,SETFLAG
   fw STORE
   fw EXIT
 
-; FLAGVAR FLAG
+; FLAGSVAR FLAG --
+defword "CLRFLAG",,CLRFLAG
+  fw SWAP
+  fw INVERT
+  fw OVER
+  fw FETCH
+  fw AND
+  fw SWAP
+  fw STORE
+  fw EXIT
+
+; FLAGSVAR FLAG -- IS_SET
 defword "CHECKFLAG",,CHECKFLAG
   fw FETCH
   fw AND
   fw ZEQU
   fw ZEQU
+  fw EXIT
+
+; MODFLAG --
+; If KBS_BREAK is set, clear MODFLAG. Otherwise, set it.
+defword "HANDLEMOD",,HANDLEMOD
+  fw KBSTATUS
+
+  fw KBS_BREAK
+  fw KBSTATUS
+  fw CHECKFLAG
+  zbranch 1f
+  fw CLRFLAG
+  fw FALSE
+  zbranch 2f
+1:
+
+  fw SETFLAG
+2:
+
+  fw RESETKB
+  fw EXIT
+
+defword "RESETKB",,RESETKB
+  ; Reset the scancode prefixes.
+  fw KBS_BREAK
+  fw KBS_EXTENDED
+  fw OR
+  fw KBSTATUS
+  fw CLRFLAG
   fw EXIT
 
 defword "KEY",,KEY
@@ -963,46 +1004,42 @@ key_top:
   zbranch 1f
   fw DROP
 
-  fw KBS_LSHIFT ; The eventual status register value.
-
-  fw KBS_BREAK
-  fw KBSTATUS
-  fw CHECKFLAG
-  zbranch 2f
-  ; break shift and clear other flags
-  ; NOTE: This assumes there are only three status flags.
-  fw DROP
-  fw FALSE
-2:
-
-  fw KBSTATUS
-  fw STORE
-  fw FALSE
-  zbranch key_top
-1:
-
-  ; Past this point, we're always matching a real key (even though we might not
-  ; handle it).
-  fw KBS_BREAK
-  fw KBSTATUS
-  fw CHECKFLAG
-  fw KBS_EXTENDED
-  fw KBSTATUS
-  fw CHECKFLAG
-  fw OR ; Store for below, but clear the status flags first.
-
-  fw KBSTATUS
-  fw FETCH
   fw KBS_LSHIFT
-  fw AND
-  fw KBSTATUS
-  fw STORE
+  fw HANDLEMOD
+  fw RESETKB
 
-  zbranch 1f
-  fw DROP ; Throw out the break codes.
   fw FALSE
   zbranch key_top
 1:
+
+  fw DUP
+  lit 0x59 ; right shift
+  fw EQU
+  zbranch 1f
+  fw DROP
+
+  fw KBS_RSHIFT
+  fw HANDLEMOD
+  fw RESETKB
+
+  fw FALSE
+  zbranch key_top
+1:
+
+  ; Past this point, we're always matching a real key and not a modifier key
+  ; (even though we might not handle it).
+  fw KBS_BREAK
+  fw KBS_EXTENDED
+  fw OR
+  fw KBSTATUS
+  fw CHECKFLAG
+  zbranch 1f
+  fw DROP ; Throw out the break and extended codes.
+  fw RESETKB
+  fw FALSE
+  zbranch key_top
+1:
+  ; Past this point, BREAK and EXTENDED are not set.
 
   ; Verify it's within the map size.
   fw DUP
@@ -1018,6 +1055,8 @@ key_top:
   ; Determine which map to use.
   lit KB_MAP
   fw KBS_LSHIFT
+  fw KBS_RSHIFT
+  fw OR
   fw KBSTATUS
   fw CHECKFLAG
   zbranch 1f

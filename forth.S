@@ -61,6 +61,8 @@ JMP main
 #define KBUF_SIZE 0x08
 #define KBUF_MASK 0x07
 
+#define SBUF_SIZE 0x20
+
 ; Interrupt called whenever the PS2 clock pin changes.
 pcint0:
   ; We read the data pin when the clock falls, so return if it's high.
@@ -282,9 +284,9 @@ cold_start:
 
   fw LCDDISABLE
   fw KBENABLE
-  fw KEY
+  fw WORD
   fw KBDISABLE
-  fw LCDCHAR
+  fw LCDSTR
 
   fw FALSE
   fw LEDSTORE
@@ -1074,6 +1076,52 @@ key_top:
 1:
   fw EXIT
 
+defcode "SBUF",,SBUF
+  ldi r16, lo8(var_SBUF)
+  ldi r17, hi8(var_SBUF)
+  PUSHDSP 16
+  JMP NEXT
+.data
+.balign SBUF_SIZE
+var_SBUF:
+.fill SBUF_SIZE, 1, 0
+.text
+
+defword "WORD",,WORD
+1:
+  fw KEY
+
+  fw DUP
+  lit ' '
+  fw EQU
+  zbranch 2f
+  fw DROP ; drop the space
+  fw FALSE
+  zbranch 1b
+2:
+  
+  fw SBUF ; Cursor.
+  fw SWAP
+1: ; CHAR CURSOR --
+  fw OVER
+  fw STOREBYTE
+
+  fw INCR
+  fw KEY
+
+  fw DUP
+  lit ' '
+  fw EQU
+  zbranch 1b
+
+  fw DROP
+  fw SBUF
+  fw SWAP
+  fw SUB
+  fw SBUF
+  fw SWAP ; length on top
+  fw EXIT
+
 defconst "LCD_E",,LCD_E,0x80
 defconst "LCD_RW_READ",,LCD_RW_READ,0x40
 defconst "LCD_RS_DR",,LCD_RS_DR,0x20
@@ -1186,7 +1234,7 @@ defword "LCDINIT",,LCDINIT
   fw LCDDISABLE
   fw EXIT
 
-defword "LCDCHAR",,LCDCHAR
+defword "EMIT",,EMIT
   fw SWIZZLE   ; Put char in high byte.
   fw LCD_RS_DR ; Data register.
   fw OR
@@ -1222,9 +1270,9 @@ defword "TOHEX",,TOHEX
 
 defword "WRITEWORD",,WRITEWORD
   lit '0'
-  fw LCDCHAR
+  fw EMIT
   lit 'x'
-  fw LCDCHAR
+  fw EMIT
   lit 4
 1:
   fw SWAP
@@ -1236,7 +1284,7 @@ defword "WRITEWORD",,WRITEWORD
   fw ASR
   fw ASR
   fw TOHEX
-  fw LCDCHAR
+  fw EMIT
   ; Shift left 4 bits to move to the next digit.
   fw ASL
   fw ASL
@@ -1251,17 +1299,23 @@ defword "WRITEWORD",,WRITEWORD
   fw DROP
   fw EXIT
 
+; LEN START --
 defword "LCDSTR",,LCDSTR
 1:
-  fw DUP  ; ADDR ADDR
-  fw CFROMROM ; CHAR ADDR
-  fw DUP      ; CHAR CHAR ADDR
-  fw LCDCHAR  ; CHAR ADDR
-  fw SWAP     ; ADDR CHAR
-  fw INCR     ; ADDR+1 CHAR
-  fw SWAP     ; CHAR ADDR+1
-  fw ZEQU     ; ZERO ADDR+1
+  fw DUP
+  zbranch 2f
+  fw DECR
+  fw SWAP
+  fw DUP
+  fw FETCHBYTE
+  fw EMIT
+  fw INCR
+  fw SWAP
+  fw FALSE
   zbranch 1b
+2:
+  fw DROP
+  fw DROP
   fw EXIT
 
 ; Relative branch.

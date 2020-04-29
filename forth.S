@@ -286,7 +286,15 @@ cold_start:
   fw KBENABLE
   fw WORD
   fw KBDISABLE
+  fw LCDCLEAR
+  fw TWODUP
   fw LCDSTR
+  fw NUMBER
+  zbranch 2f
+  lit ' '
+  fw EMIT
+  fw WRITEWORD
+2:
 
   fw FALSE
   fw LEDSTORE
@@ -670,7 +678,6 @@ defvar "STATE",,STATE
 defvar "HERE",,HERE
 defvar "LATEST",,LATEST,name_F_LENMASK  ; TODO: last word in dictionary
 defvar "S0",,SZ,DS0
-defvar "BASE",,BASE,10
 
 ; KBUF is a ring buffer that stores keyboard input. KBIN and KBOUT are indices
 ; into the buffer. KBIN is where the next byte will be written, KBOUT is where
@@ -1120,6 +1127,100 @@ defword "WORD",,WORD
   fw SUB
   fw SBUF
   fw SWAP ; length on top
+  fw EXIT
+
+; DIGIT -- SUCCESS NUMBER
+defword "DIGIT",,DIGIT
+  fw DUP
+  lit 'a'-1
+  fw LT
+  fw OVER
+  lit 'f'+1
+  fw GT
+  fw AND
+  zbranch 1f
+  lit 'a'-10
+  fw SWAP
+  fw SUB
+  fw TRUE
+  fw EXIT
+1:
+  fw DUP
+  lit 'A'-1
+  fw LT
+  fw OVER
+  lit 'F'+1
+  fw GT
+  fw AND
+  zbranch 1f
+  lit 'A'-10
+  fw SWAP
+  fw SUB
+  fw TRUE
+  fw EXIT
+1:
+  fw DUP
+  lit '0'-1
+  fw LT
+  fw OVER
+  lit '9'+1
+  fw GT
+  fw AND
+  zbranch 1f
+  lit '0'
+  fw SWAP
+  fw SUB
+  fw TRUE
+  fw EXIT
+1:
+  fw FALSE
+  fw EXIT
+
+; Parses a hex number. TODO: negatives, decimal+other bases
+; LEN START -- SUCCESS NUMBER
+defword "NUMBER",,NUMBER
+  ; Check for zero.
+  fw DUP
+  fw ZEQU
+  zbranch 1f
+  fw DROP
+  fw FALSE
+  fw EXIT
+1: ; LEN INDEX
+  lit 0
+  fw TOR
+2: ; LEN INDEX R: TOTAL
+  fw DECR
+  fw SWAP
+  fw DUP ; INDEX INDEX LEN
+  fw FETCHBYTE ; CHAR INDEX LEN
+  fw DIGIT ; SUCCESS NUMBER INDEX LEN
+  fw ZEQU ; NOTSUCCESS NUMBER INDEX LEN
+  zbranch 1f ; NUMBER INDEX LEN
+  fw RDROP
+  fw DROP ; INDEX GARBAGE
+  fw DROP ; GARBAGE
+  fw FALSE ; FALSE GARBAGE
+  fw EXIT
+1: ; NUMBER INDEX LEN
+
+  fw FROMR
+  fw ASL
+  fw ASL
+  fw ASL
+  fw ASL
+  fw ADD
+  fw TOR
+
+  fw INCR
+  fw SWAP
+  fw DUP
+  fw ZEQU
+  zbranch 2b
+  fw DROP
+  fw DROP
+  fw FROMR
+  fw TRUE
   fw EXIT
 
 defconst "LCD_E",,LCD_E,0x80

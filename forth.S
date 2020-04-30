@@ -288,13 +288,12 @@ cold_start:
   fw KBDISABLE
   fw LCDCLEAR
   fw TWODUP
-  fw LCDSTR
-  fw NUMBER
-  zbranch 2f
+  fw TELL
   lit ' '
   fw EMIT
+
+  fw FIND
   fw WRITEWORD
-2:
 
   fw FALSE
   fw LEDSTORE
@@ -302,9 +301,6 @@ cold_start:
   fw FALSE
   zbranch 1b
 
-.set F_IMMED,0x80
-.set F_HIDDEN,0x20
-.set F_LENMASK,0x1f
 .set link,0
 
 .macro defword name, flags=0, label
@@ -314,7 +310,7 @@ cold_start:
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
-  .byte \flags|(nameend_\label - . - 3) ; flags + length of the name
+  .byte \flags|(nameend_\label - . - 1) ; flags + length of the name
   .ascii "\name" ; the name
 nameend_\label :
   .balign 2
@@ -484,12 +480,22 @@ defcode "LIT",,LIT
   PUSHDSP 0
   JMP NEXT
 
-defcode "ROMC@",,CFROMROM
+defcode "ROMC@",,ROMFETCHBYTE
   POPDSP 30
   lpm r16, Z
   ldi r17, 0
   PUSHDSP 16
   JMP NEXT
+
+defword "ROM@",,ROMFETCH
+  fw DUP
+  fw ROMFETCHBYTE
+  fw SWAP
+  fw INCR
+  fw ROMFETCHBYTE
+  fw SWIZZLE
+  fw OR
+  fw EXIT
 
 defcode "+",,ADD
   POPDSP 0
@@ -676,7 +682,6 @@ var_\label:
 
 defvar "STATE",,STATE
 defvar "HERE",,HERE
-defvar "LATEST",,LATEST,name_F_LENMASK  ; TODO: last word in dictionary
 defvar "S0",,SZ,DS0
 
 ; KBUF is a ring buffer that stores keyboard input. KBIN and KBOUT are indices
@@ -723,9 +728,9 @@ defcode "RAMINIT",,RAMINIT
 
 defconst "R0",,RZ,RS0
 defconst "DOCOL",,__DOCOL,DOCOL
-defconst "F_IMMED",,F_IMMED,F_IMMED
-defconst "F_HIDDEN",,F_HIDDEN,F_HIDDEN
-defconst "F_LENMASK",,F_LENMASK,F_LENMASK
+defconst "F_IMMED",,F_IMMED,0x80
+defconst "F_HIDDEN",,F_HIDDEN,0x20
+defconst "F_LENMASK",,F_LENMASK,0x1f
 defconst "TRUE",,TRUE,0xFFFF
 defconst "FALSE",,FALSE,0x0
 
@@ -786,12 +791,12 @@ defword "LOOP",,LOOP
 
 ; pred a b -- pred ? a : b
 defword "TERN",,TERN
-  fw DUP
-  fw ROT
-  fw AND
-  fw NROT
-  fw INVERT
-  fw AND
+  fw DUP ; pred pred a b
+  fw ROT ; a pred pred b
+  fw AND ; a? pred b
+  fw NROT ; pred b a?
+  fw INVERT ; !pred b a?
+  fw AND ; b? a?
   fw OR
   fw EXIT
 
@@ -1074,7 +1079,7 @@ key_top:
 1:
 
   fw ADD
-  fw CFROMROM ; KB_MAP[keycode]
+  fw ROMFETCHBYTE ; KB_MAP[keycode]
   fw DUP
   fw ZEQU
   zbranch 1f
@@ -1177,7 +1182,7 @@ defword "DIGIT",,DIGIT
   fw EXIT
 
 ; Parses a hex number. TODO: negatives, decimal+other bases
-; LEN START -- SUCCESS NUMBER
+; LEN ADDR -- SUCCESS NUMBER
 defword "NUMBER",,NUMBER
   ; Check for zero.
   fw DUP
@@ -1370,10 +1375,6 @@ defword "TOHEX",,TOHEX
   fw EXIT
 
 defword "WRITEWORD",,WRITEWORD
-  lit '0'
-  fw EMIT
-  lit 'x'
-  fw EMIT
   lit 4
 1:
   fw SWAP
@@ -1400,8 +1401,8 @@ defword "WRITEWORD",,WRITEWORD
   fw DROP
   fw EXIT
 
-; LEN START --
-defword "LCDSTR",,LCDSTR
+; LEN ADDR --
+defword "TELL",,TELL
 1:
   fw DUP
   zbranch 2f
@@ -1435,6 +1436,101 @@ defcode "0BRANCH",,ZBRANCH
 1:
   movw IP_LREG, ZL
   JMP NEXT
+
+; TODO: Right now, ADDR1 must be in progmem. Maybe copy it into RAM?
+; LEN1 ADDR1 LEN2 ADDR2 -- EQUAL
+defword "STREQU",,STREQU
+  fw ROT
+  fw OVER ; LEN1 LEN2 LEN1 ADDR1 ADDR2
+  fw NEQU
+  zbranch 1f
+  ; Not equal lengths.
+  fw DROP
+  fw DROP
+  fw DROP
+  fw FALSE
+  fw EXIT
+1: ; LEN ADDR1 ADDR2
+
+  fw DUP
+  fw ZEQU
+  zbranch 2f
+  fw DROP
+  fw DROP
+  fw DROP
+  fw TRUE
+  fw EXIT
+2:
+
+  fw DECR
+  fw NROT ; ADDR1 ADDR2 LEN-1
+  fw OVER
+  fw FETCHBYTE ; *ADDR2
+  fw OVER
+  fw ROMFETCHBYTE ; *ADDR1
+  fw NEQU ; NEQU ADDR1 ADDR2 LEN-1
+  zbranch 2f
+  fw DROP
+  fw DROP
+  fw DROP
+  fw FALSE
+  fw EXIT
+2:
+
+  fw INCR
+  fw NROT
+  fw INCR
+  fw NROT
+  fw FALSE
+  zbranch 1b
+
+; LEN ADDR -- NAMEPTR
+defword "FIND",,FIND
+  fw LATEST
+  fw FETCH ; *LATEST LEN ADDR
+  fw TOR
+1: ; =LEN =ADDR R: THIS
+  fw TWODUP
+  fw FROMR
+  fw DUP
+  fw TOR ; THIS =LEN =ADDR =LEN =ADDR R: THIS
+  fw INCR
+  fw INCR
+  fw DUP
+  fw INCR ; ADDR &FLAGS =LEN =ADDR =LEN =ADDR
+  fw SWAP
+  fw ROMFETCHBYTE ; FLAGS ADDR =LEN =ADDR =LEN =ADDR
+  fw F_LENMASK
+  fw F_HIDDEN
+  fw OR
+  fw AND ; LEN|HIDDEN ADDR =LEN =ADDR =LEN =ADDR
+  fw STREQU
+
+  zbranch 2f
+  fw DROP
+  fw DROP
+  fw FROMR ; Found it!
+  fw EXIT
+2:
+  
+  fw FROMR
+  fw ROMFETCH ; NEXT =LEN =ADDR
+
+  fw DUP
+  fw ZEQU
+  zbranch 2f
+  fw NROT ; save the zero
+  fw DROP
+  fw DROP
+  fw EXIT
+2:
+  
+  fw TOR ; =LEN =ADDR R: NEXT
+  fw FALSE
+  zbranch 1b
+
+; The last word in the dictionary
+defvar "LATEST",,LATEST,name_LATEST
 
 ; High byte is address and is sent first.
 .text

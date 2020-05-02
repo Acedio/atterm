@@ -26,9 +26,9 @@ DS0 = 0x180
 
 .text
 ; Interrupt vectors.
-rjmp reset ; RESET
-rjmp reset ; INT0
-rjmp pcint0 ; PCINT0
+rjmp main ; RESET
+rjmp main ; INT0
+rjmp kb_clocked ; PCINT0
 nop
 nop
 nop
@@ -42,13 +42,6 @@ nop
 nop
 nop
 nop
-
-.macro JMP label
-  rjmp \label
-.endm
-
-reset:
-JMP main
 
 ; == KEYBOARD ROUTINES ==
 
@@ -64,7 +57,7 @@ JMP main
 #define SBUF_SIZE 0x20
 
 ; Interrupt called whenever the PS2 clock pin changes.
-pcint0:
+kb_clocked:
   ; We read the data pin when the clock falls, so return if it's high.
   sbic _SFR_IO_ADDR(PINB), KB_CLK_PIN
   reti
@@ -252,7 +245,7 @@ main:
   ldi IP_LREG, lo8(cold_start)
   ldi IP_LREG+1, hi8(cold_start)
   ; Call NEXT to kick things off.
-  JMP NEXT
+  rjmp NEXT
 
 .macro fw name
   .byte T_\name - TOKEN_TABLE
@@ -278,28 +271,10 @@ cold_start:
   fw LCDINIT
   fw KBINIT
 
-1:
   fw TRUE
   fw LEDSTORE
 
-  fw LCDDISABLE
-  fw KBENABLE
-  fw WORD
-  fw KBDISABLE
-  fw LCDCLEAR
-  fw TWODUP
-  fw TELL
-  lit ' '
-  fw EMIT
-
-  fw FIND
-  fw WRITEWORD
-
-  fw FALSE
-  fw LEDSTORE
-
-  fw FALSE
-  zbranch 1b
+  fw QUIT
 
 .set link,0
 
@@ -310,6 +285,7 @@ cold_start:
 name_\label :
   .word link ; link to the previously defined word
   .set link,name_\label
+  ; TODO: ORing defconst flags together doesn't seem to work.
   .byte \flags|(nameend_\label - . - 1) ; flags + length of the name
   .ascii "\name" ; the name
 nameend_\label :
@@ -420,27 +396,27 @@ defcode "LATCHBLINK",,LATCHBLINK
 
 defcode "DROP",,DROP
   adiw Y, 2
-  JMP NEXT
+  rjmp NEXT
 
 defcode "SWAP",,SWAP
   POPDSP 0
   POPDSP 2
   PUSHDSP 0
   PUSHDSP 2
-  JMP NEXT
+  rjmp NEXT
 
 defcode "DUP",,DUP
   ; MSB is top of stack, LSB is next
   ldd r0, Y+1
   ld r1, Y
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "OVER",,OVER
   ldd r0, Y+3
   ldd r1, Y+2
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "ROT",,ROT
   ; Bring the third item to the top.
@@ -450,11 +426,11 @@ defcode "ROT",,ROT
   PUSHDSP 2
   PUSHDSP 0
   PUSHDSP 4
-  JMP NEXT
+  rjmp NEXT
 
 defcode "EXIT",,EXIT
   POPRSP IP_LREG
-  JMP NEXT
+  rjmp NEXT
 
 defword "-ROT",,NROT
   fw ROT
@@ -478,14 +454,14 @@ defcode "LIT",,LIT
   lpm r0, Z+
   lpm r1, Z
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "ROMC@",,ROMFETCHBYTE
   POPDSP 30
   lpm r16, Z
   ldi r17, 0
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 
 defword "ROM@",,ROMFETCH
   fw DUP
@@ -503,7 +479,7 @@ defcode "+",,ADD
   add r0, r2
   adc r1, r3
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "-",,SUB
   POPDSP 0
@@ -511,7 +487,7 @@ defcode "-",,SUB
   sub r0, r2
   sbc r1, r3
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defword "1+",,INCR
   lit 1
@@ -528,14 +504,14 @@ defcode "2*",,ASL
   lsl r0 ; shift into carry
   rol r1 ; shifts carry into low bit
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "2/",,ASR
   POPDSP 0
   asr r1 ; leave high bit, shift rest, shift into carry
   ror r0 ; shifts carry into high bit
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "AND",,AND
   POPDSP 0
@@ -543,7 +519,7 @@ defcode "AND",,AND
   and r0, r2
   and r1, r3
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "OR",,OR
   POPDSP 0
@@ -551,7 +527,7 @@ defcode "OR",,OR
   or r0, r2
   or r1, r3
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "XOR",,XOR
   POPDSP 0
@@ -559,14 +535,14 @@ defcode "XOR",,XOR
   eor r0, r2
   eor r1, r3
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "INVERT",,INVERT
   POPDSP 0
   com r0
   com r1
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 ; Switch the high and low bytes.
 defcode "SWIZZLE",,SWIZZLE
@@ -575,7 +551,7 @@ defcode "SWIZZLE",,SWIZZLE
   mov r0, r1
   mov r1, r2
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "0=",,ZEQU
   POPDSP 30
@@ -586,7 +562,7 @@ defcode "0=",,ZEQU
 1:
   mov r17, r16 ; Mirror into r16
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 
 defcode "0<",,ZLT
   POPDSP 30
@@ -597,7 +573,7 @@ defcode "0<",,ZLT
 1:
   mov r17, r16 ; Mirror into r16
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 
 defword "0>",,ZGT
   fw DUP
@@ -633,14 +609,14 @@ defcode "C!",,STOREBYTE
   POPDSP 30 ; address
   POPDSP 0 ; data
   st Z, r0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "C@",,FETCHBYTE
   POPDSP 30 ; address
   ld r16, Z
   ldi r17, 0
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 
 ; (addr data -- )
 defword "!",,STORE
@@ -673,7 +649,7 @@ defword "@",,FETCH
   ldi r16, lo8(var_\label)
   ldi r17, hi8(var_\label)
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
   .data
 var_\label:
   .word \initial
@@ -695,7 +671,7 @@ defcode "KBUF",,KBUF
   ldi r16, lo8(var_KBUF)
   ldi r17, hi8(var_KBUF)
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 .data
 .balign KBUF_SIZE
 var_KBUF:
@@ -716,14 +692,15 @@ defcode "RAMINIT",,RAMINIT
   sbc r17, ZH
   or r16, r17
   brne 1b
-  JMP NEXT
+  rjmp NEXT
 
 .macro defconst name, flags=0, label, value
+  .set value_\name, value
   defcode \name,\flags,\label
   ldi r16, lo8(\value)
   ldi r17, hi8(\value)
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 .endm
 
 defconst "R0",,RZ,RS0
@@ -745,40 +722,40 @@ defstring "GREETING",,GREETING,"Hello, world!"
 defcode ">R",,TOR
   POPDSP 0
   PUSHRSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "R>",,FROMR
   POPRSP 0
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "RSP@",,RSPFETCH
   in r0, _SFR_IO_ADDR(SPL)
   in r1, _SFR_IO_ADDR(SPH)
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "RSP!",,RSPSTORE
   POPDSP 0
   out _SFR_IO_ADDR(SPL), r0
   out _SFR_IO_ADDR(SPH), r1
-  JMP NEXT
+  rjmp NEXT
 
 defcode "RDROP",,RDROP
   POPRSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "DSP@",,DSPFETCH
   ; PUSHDSP isn't atomic, so need to buffer it via a different register.
   movw r0, DS_LREG
   PUSHDSP 0
-  JMP NEXT
+  rjmp NEXT
 
 defcode "DSP!",,DSPSTORE
   ; POPDSP isn't atomic, so need to buffer it via a different register.
   POPDSP 0
   movw DS_LREG, r0
-  JMP NEXT
+  rjmp NEXT
 
 ; DUPs the return address so that a copy of the LOOP point still exists even
 ; after EXITing from this word.
@@ -841,7 +818,7 @@ defcode "KBINIT",,KBINIT
   ; Initialize the state machine.
   ldi r16, PS2_START
   mov PS2_STATE_REG, r16
-  JMP KBDISABLE
+  rjmp KBDISABLE
 
 defcode "KBDISABLE",,KBDISABLE
   cli
@@ -860,7 +837,7 @@ defcode "KBDISABLE",,KBDISABLE
 1:
   dec r16 ; 1 clk
   brne 1b ; 2 clk on loop
-  JMP NEXT
+  rjmp NEXT
 
 defcode "KBENABLE",,KBENABLE
   ; Set CLK as input and enable pullups.
@@ -874,7 +851,7 @@ defcode "KBENABLE",,KBENABLE
   ldi r16, _BV(PCIE)
   out _SFR_IO_ADDR(GIMSK), r16
   sei
-  JMP NEXT
+  rjmp NEXT
 
 defword "KB@",,KBFETCH
   fw KBOUT
@@ -1092,7 +1069,7 @@ defcode "SBUF",,SBUF
   ldi r16, lo8(var_SBUF)
   ldi r17, hi8(var_SBUF)
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 .data
 .balign SBUF_SIZE
 var_SBUF:
@@ -1245,12 +1222,12 @@ defcode "SERINIT",,SERINIT
   cbi _SFR_IO_ADDR(PORTB), SER_CLK_PIN
   cbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
   cbi _SFR_IO_ADDR(PORTB), SER_DATA_PIN
-  JMP NEXT
+  rjmp NEXT
 
 defcode "SERLATCH",,SERLATCH
   cbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
   sbi _SFR_IO_ADDR(PORTB), SER_LATCH_PIN
-  JMP NEXT
+  rjmp NEXT
 
 ; Must set the LCD to LCD_RW_READ first.
 defcode "LCDBUSY",,LCDBUSY
@@ -1259,7 +1236,7 @@ defcode "LCDBUSY",,LCDBUSY
   ldi r16, 0xFF ; port is busy
   mov r17, r16
   PUSHDSP 16
-  JMP NEXT
+  rjmp NEXT
 
 defcode "B>SER",,BYTETOSER
   POPDSP 0
@@ -1279,7 +1256,7 @@ defcode "B>SER",,BYTETOSER
   ; Turn off USI.
   ldi r16, 0
   out _SFR_IO_ADDR(USICR), r16
-  JMP NEXT
+  rjmp NEXT
 
 ; Writes a word to the shift registers.
 defword ">SER",,TOSER
@@ -1435,7 +1412,7 @@ defcode "0BRANCH",,ZBRANCH
   adc ZH, r1
 1:
   movw IP_LREG, ZL
-  JMP NEXT
+  rjmp NEXT
 
 ; TODO: Right now, ADDR1 must be in progmem. Maybe copy it into RAM?
 ; LEN1 ADDR1 LEN2 ADDR2 -- EQUAL
@@ -1528,6 +1505,86 @@ defword "FIND",,FIND
   fw TOR ; =LEN =ADDR R: NEXT
   fw FALSE
   zbranch 1b
+
+defword ">CFA",,TOCFA
+  fw INCR
+  fw INCR
+  fw DUP
+  fw ROMFETCHBYTE
+  fw F_LENMASK
+  fw AND
+  fw INCR ; + 1 to also skip the FLAGS
+  fw ADD
+  fw INCR ; + 1 and AND to round to next word boundary
+  fw TRUE
+  fw DECR ; 0xFFFE
+  fw AND
+  fw EXIT
+
+defword ">DFA",,TODFA
+  fw TOCFA
+  fw INCR
+  fw EXIT
+
+defword "QUIT",,QUIT
+  fw RZ
+  fw RSPSTORE
+1:
+  fw INTERPRET
+  fw FALSE
+  zbranch 1b
+
+defcode "__EXE",,__EXE
+  POPDSP 30
+
+  ; Move codeword address into r22:23 so it's accessible by DOCOL.
+  movw r22, Z
+
+  ; Load the codeword.
+  lpm r20, Z+
+  lpm r21, Z
+
+  ; Execute (jump to) the codeword. Eventually NEXT will be called and we'll
+  ; return to EXECUTE, below.
+  movw ZL, r20
+  ijmp
+
+; xt -- R: codeword
+defword "EXECUTE",,EXECUTE
+  fw TOCFA
+  fw __EXE
+  fw EXIT
+
+defword "INTERPRET",,INTERPRET
+  fw LCDDISABLE
+  fw KBENABLE
+  fw WORD
+  fw KBDISABLE
+  fw LCDCLEAR
+  fw TWODUP
+  fw TELL
+
+  fw TWODUP
+  fw FIND
+  fw DUP
+  zbranch 1f
+  ; found word, execute it
+  fw NROT
+  fw TWODROP ; drop name
+  fw EXECUTE
+  fw EXIT
+1:
+  fw DROP ; drop zero
+
+  fw TWODUP
+  fw NUMBER
+  zbranch 1f
+  fw NROT ; Leave number on stack
+  fw TWODROP
+  fw EXIT
+1:
+  ; error, name not found and not a literal.
+  fw QUIT
 
 ; The last word in the dictionary
 defvar "LATEST",,LATEST,name_LATEST
